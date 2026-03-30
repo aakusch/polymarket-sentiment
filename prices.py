@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import sqlite3
 from datetime import datetime, timezone
 
 import httpx
@@ -55,37 +54,11 @@ async def fetch_fear_greed(days: int = 90) -> list[tuple[str, int]]:
     return results
 
 
-def save_reference_prices(
-    conn: sqlite3.Connection,
-    btc_prices: list[tuple[str, float]],
-    fng_values: list[tuple[str, int]],
-):
-    """Merge BTC prices and F&G values into reference_prices table."""
-    # Index by date
-    btc_by_date = {d: p for d, p in btc_prices}
-    fng_by_date = {d: v for d, v in fng_values}
-    all_dates = sorted(set(btc_by_date) | set(fng_by_date))
-
-    for d in all_dates:
-        btc = btc_by_date.get(d)
-        fng = fng_by_date.get(d)
-        conn.execute(
-            """INSERT INTO reference_prices (date, btc_price, fear_greed)
-               VALUES (?, ?, ?)
-               ON CONFLICT(date) DO UPDATE SET
-                 btc_price = COALESCE(excluded.btc_price, btc_price),
-                 fear_greed = COALESCE(excluded.fear_greed, fear_greed)""",
-            (d, btc, fng),
-        )
-    conn.commit()
-    log.info("Saved reference prices for %d dates", len(all_dates))
-
-
-async def update_reference_prices(conn: sqlite3.Connection, days: int = 90):
-    """Fetch and save both BTC prices and Fear & Greed Index."""
+async def update_reference_prices(db, days: int = 90):
+    """Fetch and save both BTC prices and Fear & Greed Index via Database object."""
     btc = await fetch_btc_prices(days)
     fng = await fetch_fear_greed(days)
-    save_reference_prices(conn, btc, fng)
+    db.save_reference_prices(btc, fng)
 
 
 if __name__ == "__main__":
@@ -98,6 +71,6 @@ if __name__ == "__main__":
     async def _main():
         db = Database()
         with db:
-            await update_reference_prices(db.connect(), days=90)
+            await update_reference_prices(db, days=90)
 
     asyncio.run(_main())

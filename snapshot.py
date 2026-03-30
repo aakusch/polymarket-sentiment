@@ -75,7 +75,7 @@ async def run_snapshot(
         # 6. Fetch reference prices (BTC + Fear & Greed)
         log.info("Step 6/6: Updating reference prices...")
         try:
-            await update_reference_prices(db.connect(), days=90)
+            await update_reference_prices(db, days=90)
         except Exception as e:
             log.warning("Reference price update failed (non-fatal): %s", e)
 
