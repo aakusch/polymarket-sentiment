@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en" class="bg-gray-950">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Polymarket Crypto Sentiment Index</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; }
+    .tabular-nums { font-variant-numeric: tabular-nums; }
+    .page { display: none; }
+    .page.active { display: block; }
+    .nav-link { transition: color 0.15s, border-color 0.15s; }
+    .nav-link.active { color: #e5e7eb; border-bottom-color: #60a5fa; }
+    .sparkline { display: inline-block; vertical-align: middle; }
+    .asset-card { transition: background-color 0.15s, border-color 0.15s; }
+    .asset-card:hover { background-color: rgba(55,65,81,0.5); border-color: rgba(107,114,128,0.5); }
+  </style>
+</head>
+<body class="bg-gray-950 text-gray-200 min-h-screen">
+
+  <!-- Top Navigation -->
+  <nav class="sticky top-0 z-50 bg-gray-950/95 backdrop-blur border-b border-gray-800/50">
+    <div class="max-w-7xl mx-auto px-4">
+      <div class="flex items-center justify-between h-14">
+        <div class="flex items-center gap-1">
+          <span class="text-sm font-semibold text-gray-300 mr-4 hidden sm:inline">PCSI</span>
+          <a href="#overview" data-nav="overview" class="nav-link px-3 py-4 text-sm text-gray-500 border-b-2 border-transparent hover:text-gray-300">Overview</a>
+          <a href="#categories" data-nav="categories" class="nav-link px-3 py-4 text-sm text-gray-500 border-b-2 border-transparent hover:text-gray-300">Categories</a>
+          <a href="#markets" data-nav="markets" class="nav-link px-3 py-4 text-sm text-gray-500 border-b-2 border-transparent hover:text-gray-300">Markets</a>
+          <a href="#methodology" data-nav="methodology" class="nav-link px-3 py-4 text-sm text-gray-500 border-b-2 border-transparent hover:text-gray-300">Methodology</a>
+        </div>
+        <div id="nav-score" class="text-sm tabular-nums text-gray-500"></div>
+      </div>
+    </div>
+  </nav>
+
+  <div class="max-w-7xl mx-auto px-4 py-6">
+
+    <!-- ═══ OVERVIEW PAGE ═══ -->
+    <div id="page-overview" class="page space-y-6">
+
+      <!-- Hero Strip -->
+      <section id="hero" class="py-6"></section>
+
+      <!-- Dual-Axis Time Series Chart -->
+      <section class="bg-gray-900/50 rounded-2xl p-6 border border-gray-800/50">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide">Sentiment vs BTC Price</h2>
+          <div id="chart-toggles" class="flex flex-wrap gap-1.5"></div>
+        </div>
+        <div style="height: 400px">
+          <canvas id="sentiment-chart"></canvas>
+        </div>
+      </section>
+
+      <!-- Asset Sentiment Cards -->
+      <section>
+        <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-4">Asset Sentiment</h2>
+        <div id="asset-cards" class="flex gap-3 overflow-x-auto pb-2"></div>
+      </section>
+
+      <!-- Forward Curve -->
+      <section class="bg-gray-900/50 rounded-2xl p-6 border border-gray-800/50">
+        <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-4">Forward Curve — Sentiment by Time Horizon</h2>
+        <div id="forward-curve" class="space-y-3"></div>
+      </section>
+
+      <!-- Metrics Row -->
+      <section>
+        <div id="metrics" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3"></div>
+      </section>
+
+    </div>
+
+    <!-- ═══ CATEGORIES PAGE ═══ -->
+    <div id="page-categories" class="page space-y-8">
+      <h1 class="text-xl font-light text-gray-300 tracking-wide">Category Breakdown</h1>
+      <div id="category-sections"></div>
+    </div>
+
+    <!-- ═══ MARKETS PAGE ═══ -->
+    <div id="page-markets" class="page">
+      <div class="bg-gray-900/50 rounded-2xl p-6 border border-gray-800/50">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide">Market Explorer</h2>
+          <span id="markets-count" class="text-xs text-gray-500"></span>
+        </div>
+        <div id="table-filters" class="mb-4"></div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left">
+            <thead>
+              <tr class="border-b border-gray-800">
+                <th data-sort="question" onclick="sortTable('question')" class="py-2 pr-3 text-xs text-gray-500 font-medium cursor-pointer hover:text-gray-300">Market <span class="sort-arrow"></span></th>
+                <th data-sort="asset" onclick="sortTable('asset')" class="py-2 px-3 text-xs text-gray-500 font-medium cursor-pointer hover:text-gray-300">Asset <span class="sort-arrow"></span></th>
+                <th data-sort="category" onclick="sortTable('category')" class="py-2 px-3 text-xs text-gray-500 font-medium cursor-pointer hover:text-gray-300">Category <span class="sort-arrow"></span></th>
+                <th data-sort="polarity" onclick="sortTable('polarity')" class="py-2 px-3 text-xs text-gray-500 font-medium cursor-pointer hover:text-gray-300">Polarity <span class="sort-arrow"></span></th>
+                <th data-sort="probability" onclick="sortTable('probability')" class="py-2 px-3 text-xs text-gray-500 font-medium cursor-pointer hover:text-gray-300">Prob <span class="sort-arrow"></span></th>
+                <th data-sort="signal" onclick="sortTable('signal')" class="py-2 px-3 text-xs text-gray-500 font-medium cursor-pointer hover:text-gray-300">Signal <span class="sort-arrow"></span></th>
+                <th data-sort="weight" onclick="sortTable('weight')" class="py-2 px-3 text-xs text-gray-500 font-medium cursor-pointer hover:text-gray-300">Weight <span class="sort-arrow"></span></th>
+                <th data-sort="volume_24h" onclick="sortTable('volume_24h')" class="py-2 pl-3 text-xs text-gray-500 font-medium cursor-pointer hover:text-gray-300 text-right">Volume 24h <span class="sort-arrow"></span></th>
+              </tr>
+            </thead>
+            <tbody id="markets-tbody"></tbody>
+          </table>
+        </div>
+        <div id="show-more" class="hidden mt-4 text-center">
+          <button onclick="showMoreRows()" class="px-4 py-2 bg-gray-800 text-gray-400 text-sm rounded-lg hover:bg-gray-700 transition-colors">
+            <span></span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ METHODOLOGY PAGE ═══ -->
+    <div id="page-methodology" class="page space-y-8">
+      <h1 class="text-xl font-light text-gray-300 tracking-wide">Methodology</h1>
+      <div id="methodology-content"></div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="text-center text-xs text-gray-600 py-6 mt-8">
+      Data from Polymarket public APIs &middot; BTC price from CoinGecko &middot; Fear &amp; Greed from Alternative.me<br>
+      Scores are informational only, not financial advice.
+    </footer>
+
+  </div>
+
+  <script src="js/app.js"></script>
+  <script src="js/chart.js"></script>
+  <script src="js/table.js"></script>
+
+</body>
+</html>

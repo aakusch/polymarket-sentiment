@@ -1,0 +1,18 @@
+# Database
+*.db
+
+# Environment
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# OS
+.DS_Store
+
+# Migration script (one-off)
+migrate.py
