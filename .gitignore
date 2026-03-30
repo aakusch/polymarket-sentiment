@@ -14,5 +14,8 @@ venv/
 # OS
 .DS_Store
 
+# Vercel
+.vercel/
+
 # Migration script (one-off)
 migrate.py
