@@ -24,6 +24,11 @@ MAX_VOLUME = 50_000_000     # log-scaled normalization ceiling for 24h volume
 MAX_LIQUIDITY = 10_000_000  # log-scaled normalization ceiling for liquidity
 MAX_OI = 20_000_000         # log-scaled normalization ceiling for open interest
 
+RESOLVED_PROB_LOW = 0.02    # Markets below this are effectively settled → skip
+RESOLVED_PROB_HIGH = 0.98   # Markets above this are effectively settled → skip
+
+SIGNAL_COMPRESSION_K = 3.0  # tanh steepness: higher = more sensitivity near 0.5
+
 WEIGHT_VOLUME = 0.4
 WEIGHT_LIQUIDITY = 0.3
 WEIGHT_OI = 0.2
@@ -114,6 +119,9 @@ ASSET_PATTERNS: dict[str, str] = {
 # Regex pattern for short-duration binary option noise markets
 NOISE_TITLE_PATTERN = r"Up or Down"
 NOISE_MAX_DURATION_HOURS = 24  # Exclude events shorter than this
+
+# Question-level noise patterns (applied in scorer, not just discovery)
+NOISE_QUESTION_PATTERNS = [r"(?i)\bup or down\b"]
 
 # ── Database ──────────────────────────────────────────────────────────────
 

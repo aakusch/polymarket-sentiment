@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
+import re
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from math import log1p
+from math import log1p, tanh
 from statistics import mean
 
 from classifier import Classification
@@ -14,6 +16,10 @@ from config import (
     MAX_LIQUIDITY,
     MAX_OI,
     MAX_VOLUME,
+    NOISE_QUESTION_PATTERNS,
+    RESOLVED_PROB_HIGH,
+    RESOLVED_PROB_LOW,
+    SIGNAL_COMPRESSION_K,
     TIME_DECAY_HORIZON_DAYS,
     WEIGHT_LIQUIDITY,
     WEIGHT_OI,
@@ -59,6 +65,14 @@ class SectorScore:
     market_scores: list[MarketScore] = field(default_factory=list)
 
 
+_noise_q_re = [re.compile(p) for p in NOISE_QUESTION_PATTERNS]
+
+
+def _is_noise_market(question: str) -> bool:
+    """Return True if the market question matches a noise pattern."""
+    return any(pat.search(question) for pat in _noise_q_re)
+
+
 def market_sentiment(market: Market, classification: Classification) -> float:
     """Compute directional sentiment signal for a market. Returns [-1, +1]."""
     if not market.outcome_prices:
@@ -72,9 +86,9 @@ def market_sentiment(market: Market, classification: Classification) -> float:
     prob = max(0.0, min(1.0, prob))  # clamp
 
     if classification.polarity == "bullish":
-        return (prob - 0.5) * 2     # 0.5 -> 0, 1.0 -> +1, 0.0 -> -1
+        return tanh(SIGNAL_COMPRESSION_K * (prob - 0.5))
     elif classification.polarity == "bearish":
-        return (0.5 - prob) * 2     # Inverted
+        return tanh(SIGNAL_COMPRESSION_K * (0.5 - prob))
     return 0.0
 
 
@@ -143,6 +157,33 @@ def score_market(
     )
 
 
+def _event_deduped_composite(scores: list[MarketScore]) -> float:
+    """Compute weighted average after consolidating markets within the same event.
+
+    Each event group is reduced to a single intra-group weighted average signal,
+    then those consolidated signals are combined in a weighted average where each
+    event's weight = sum of its constituent market weights.
+    """
+    if not scores:
+        return 0.0
+
+    by_event: dict[str, list[MarketScore]] = defaultdict(list)
+    for ms in scores:
+        by_event[ms.event_id].append(ms)
+
+    weighted_sum = 0.0
+    total_weight = 0.0
+    for _eid, group in by_event.items():
+        g_w_sum = sum(ms.sentiment_signal * ms.weight for ms in group)
+        g_total_w = sum(ms.weight for ms in group)
+        if g_total_w > 0:
+            consolidated_signal = g_w_sum / g_total_w
+            weighted_sum += consolidated_signal * g_total_w
+            total_weight += g_total_w
+
+    return weighted_sum / total_weight if total_weight > 0 else 0.0
+
+
 def sector_sentiment(
     markets: list[Market],
     classifications: dict[str, Classification],
@@ -161,16 +202,25 @@ def sector_sentiment(
         cls = classifications.get(m.id)
         if not cls:
             continue
+
+        # A1: Skip effectively resolved markets
+        prob = m.outcome_prices[0] if m.outcome_prices else 0.5
+        if prob <= RESOLVED_PROB_LOW or prob >= RESOLVED_PROB_HIGH:
+            continue
+
+        # A2: Skip noise markets (e.g. "Up or Down" coin flips)
+        if _is_noise_market(m.question):
+            continue
+
         ob = order_books.get(m.id)
         ms = score_market(m, cls, ob, now)
         market_scores.append(ms)
-        weighted_sum += ms.sentiment_signal * ms.weight
-        total_weight += ms.weight
 
-    composite = weighted_sum / total_weight if total_weight > 0 else 0.0
+    # A5: Event-deduplicated composite
+    composite = _event_deduped_composite(market_scores)
     composite = max(-1.0, min(1.0, composite))
 
-    # Sub-scores by signal type category
+    # Sub-scores by signal type category (also event-deduped)
     sub_categories = {
         "price_targets": ["price_above", "price_below", "price_range"],
         "regulatory": ["regulatory_positive", "regulatory_negative"],
@@ -181,9 +231,7 @@ def sector_sentiment(
     for cat_name, types in sub_categories.items():
         cat_markets = [ms for ms in market_scores if ms.classification in types]
         if cat_markets:
-            cat_w_sum = sum(ms.sentiment_signal * ms.weight for ms in cat_markets)
-            cat_total_w = sum(ms.weight for ms in cat_markets)
-            sub_scores[cat_name] = cat_w_sum / cat_total_w if cat_total_w > 0 else 0.0
+            sub_scores[cat_name] = _event_deduped_composite(cat_markets)
         else:
             sub_scores[cat_name] = 0.0
 

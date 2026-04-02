@@ -6,15 +6,22 @@ import asyncio
 import logging
 from collections import defaultdict
 from datetime import date, datetime, timezone
+from math import tanh
 
 import click
 
 from classifier import classify_batch
 from collector import Collector, PricePoint
-from config import BACKFILL_FIDELITY, BACKFILL_INTERVAL
+from config import (
+    BACKFILL_FIDELITY,
+    BACKFILL_INTERVAL,
+    RESOLVED_PROB_HIGH,
+    RESOLVED_PROB_LOW,
+    SIGNAL_COMPRESSION_K,
+)
 from db import Database
 from discovery import Discoverer, Market
-from scorer import MarketScore, SectorScore, market_weight
+from scorer import MarketScore, SectorScore, _is_noise_market, market_weight
 
 log = logging.getLogger(__name__)
 
@@ -30,9 +37,9 @@ def _score_from_price(
     """Create a MarketScore from a historical price point."""
     prob = max(0.0, min(1.0, price))
     if polarity == "bullish":
-        signal = (prob - 0.5) * 2
+        signal = tanh(SIGNAL_COMPRESSION_K * (prob - 0.5))
     elif polarity == "bearish":
-        signal = (0.5 - prob) * 2
+        signal = tanh(SIGNAL_COMPRESSION_K * (0.5 - prob))
     else:
         signal = 0.0
 
@@ -120,6 +127,12 @@ async def run_backfill(
                 market = markets_by_id.get(market_id)
                 cls = classifications.get(market_id)
                 if not market or not cls:
+                    continue
+
+                prob = max(0.0, min(1.0, price))
+                if prob <= RESOLVED_PROB_LOW or prob >= RESOLVED_PROB_HIGH:
+                    continue
+                if _is_noise_market(market.question):
                     continue
 
                 weight = market_weight(market)

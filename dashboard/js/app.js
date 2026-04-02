@@ -55,6 +55,9 @@ function handleRoute() {
     case 'methodology':
       renderMethodologyPage();
       break;
+    case 'builder':
+      renderBuilderPage(params);
+      break;
   }
 }
 
@@ -405,6 +408,31 @@ function renderMethodologyPage() {
       </div>
     </div>
   `;
+}
+
+// ── Shared Scoring Utilities (used by builder.js) ───────────────────────
+
+const SIGNAL_K = 3.0;
+const RESOLVED_LOW = 0.02;
+const RESOLVED_HIGH = 0.98;
+const NOISE_RE = /\bup or down\b/i;
+
+function computeSignal(prob, polarity, compressed) {
+  if (polarity === 'neutral') return 0;
+  if (compressed) {
+    const x = polarity === 'bullish' ? (prob - 0.5) : (0.5 - prob);
+    return Math.tanh(SIGNAL_K * x);
+  }
+  // Linear fallback
+  return polarity === 'bullish' ? (prob - 0.5) * 2 : (0.5 - prob) * 2;
+}
+
+function isResolved(prob) {
+  return prob <= RESOLVED_LOW || prob >= RESOLVED_HIGH;
+}
+
+function isNoiseMarket(question) {
+  return NOISE_RE.test(question);
 }
 
 // ── Boot ─────────────────────────────────────────────────────────────────

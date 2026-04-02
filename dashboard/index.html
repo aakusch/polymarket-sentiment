@@ -30,6 +30,7 @@
           <a href="#categories" data-nav="categories" class="nav-link px-3 py-4 text-sm text-gray-500 border-b-2 border-transparent hover:text-gray-300">Categories</a>
           <a href="#markets" data-nav="markets" class="nav-link px-3 py-4 text-sm text-gray-500 border-b-2 border-transparent hover:text-gray-300">Markets</a>
           <a href="#methodology" data-nav="methodology" class="nav-link px-3 py-4 text-sm text-gray-500 border-b-2 border-transparent hover:text-gray-300">Methodology</a>
+          <a href="#builder" data-nav="builder" class="nav-link px-3 py-4 text-sm text-gray-500 border-b-2 border-transparent hover:text-gray-300">Builder</a>
         </div>
         <div id="nav-score" class="text-sm tabular-nums text-gray-500"></div>
       </div>
@@ -113,6 +114,102 @@
       </div>
     </div>
 
+    <!-- ═══ BUILDER PAGE ═══ -->
+    <div id="page-builder" class="page">
+      <div class="flex items-center justify-between mb-6">
+        <h1 class="text-xl font-light text-gray-300 tracking-wide">Custom Indicator Builder</h1>
+        <div class="flex gap-2">
+          <button onclick="builderResetSelections()" class="px-3 py-1.5 text-xs bg-gray-700 text-gray-300 rounded-lg hover:bg-gray-600 transition-colors">Reset</button>
+          <button onclick="builderSavePreset()" class="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-500 transition-colors">Save Preset</button>
+          <button onclick="builderLoadPreset()" class="px-3 py-1.5 text-xs bg-gray-700 text-gray-300 rounded-lg hover:bg-gray-600 transition-colors">Load Preset</button>
+        </div>
+      </div>
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- Left: Market selector (2/3) -->
+        <div class="lg:col-span-2 space-y-4">
+          <div class="bg-gray-900/50 rounded-2xl p-5 border border-gray-800/50">
+            <div class="flex items-center justify-between mb-3">
+              <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide">Market Selector</h2>
+              <div class="flex gap-2 items-center">
+                <span id="builder-selected-count" class="text-xs text-gray-500"></span>
+                <button onclick="builderSelectAll()" class="px-2 py-1 text-xs bg-gray-700 text-gray-300 rounded hover:bg-gray-600">Select All</button>
+                <button onclick="builderDeselectAll()" class="px-2 py-1 text-xs bg-gray-700 text-gray-300 rounded hover:bg-gray-600">Deselect All</button>
+              </div>
+            </div>
+            <div id="builder-filters" class="mb-3"></div>
+            <div class="overflow-x-auto" style="max-height:600px;overflow-y:auto">
+              <table class="w-full text-left">
+                <thead class="sticky top-0 bg-gray-900">
+                  <tr class="border-b border-gray-800">
+                    <th class="py-2 pr-2 w-8"><input type="checkbox" id="builder-toggle-all" onchange="builderToggleAllVisible(this.checked)" class="rounded bg-gray-700 border-gray-600"></th>
+                    <th data-bsort="question" onclick="builderSort('question')" class="py-2 pr-3 text-xs text-gray-500 font-medium cursor-pointer hover:text-gray-300">Market <span class="bsort-arrow"></span></th>
+                    <th data-bsort="asset" onclick="builderSort('asset')" class="py-2 px-3 text-xs text-gray-500 font-medium cursor-pointer hover:text-gray-300">Asset <span class="bsort-arrow"></span></th>
+                    <th data-bsort="category" onclick="builderSort('category')" class="py-2 px-3 text-xs text-gray-500 font-medium cursor-pointer hover:text-gray-300">Cat <span class="bsort-arrow"></span></th>
+                    <th data-bsort="polarity" onclick="builderSort('polarity')" class="py-2 px-3 text-xs text-gray-500 font-medium cursor-pointer hover:text-gray-300">Pol <span class="bsort-arrow"></span></th>
+                    <th data-bsort="probability" onclick="builderSort('probability')" class="py-2 px-3 text-xs text-gray-500 font-medium cursor-pointer hover:text-gray-300">Prob <span class="bsort-arrow"></span></th>
+                    <th data-bsort="signal" onclick="builderSort('signal')" class="py-2 px-3 text-xs text-gray-500 font-medium cursor-pointer hover:text-gray-300">Signal <span class="bsort-arrow"></span></th>
+                  </tr>
+                </thead>
+                <tbody id="builder-tbody"></tbody>
+              </table>
+            </div>
+            <div id="builder-show-more" class="hidden mt-3 text-center">
+              <button onclick="builderShowMore()" class="px-4 py-2 bg-gray-800 text-gray-400 text-sm rounded-lg hover:bg-gray-700 transition-colors">
+                <span></span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right: Live preview (1/3, sticky) -->
+        <div class="lg:col-span-1">
+          <div class="lg:sticky lg:top-20 space-y-4">
+            <!-- Live composite -->
+            <div class="bg-gray-900/50 rounded-2xl p-5 border border-gray-800/50 text-center">
+              <div class="text-xs text-gray-500 uppercase tracking-wide mb-2">Custom Composite</div>
+              <div id="builder-score" class="text-5xl font-bold mb-1">--</div>
+              <div id="builder-label" class="text-sm font-medium mb-2"></div>
+              <div id="builder-meta" class="text-xs text-gray-500"></div>
+              <div id="builder-default-compare" class="mt-3 text-xs text-gray-500"></div>
+            </div>
+
+            <!-- Category breakdown bars -->
+            <div class="bg-gray-900/50 rounded-2xl p-5 border border-gray-800/50">
+              <div class="text-xs text-gray-500 uppercase tracking-wide mb-3">Category Breakdown</div>
+              <div id="builder-cat-bars" class="space-y-2"></div>
+            </div>
+
+            <!-- Scoring options -->
+            <div class="bg-gray-900/50 rounded-2xl p-5 border border-gray-800/50">
+              <div class="text-xs text-gray-500 uppercase tracking-wide mb-3">Scoring Options</div>
+              <div class="space-y-3">
+                <label class="flex items-center justify-between cursor-pointer">
+                  <span class="text-sm text-gray-300">Filter resolved (p&lt;2% / p&gt;98%)</span>
+                  <input type="checkbox" id="opt-filterResolved" checked onchange="builderRecompute()" class="rounded bg-gray-700 border-gray-600 text-blue-500">
+                </label>
+                <label class="flex items-center justify-between cursor-pointer">
+                  <span class="text-sm text-gray-300">Filter noise ("Up or Down")</span>
+                  <input type="checkbox" id="opt-filterNoise" checked onchange="builderRecompute()" class="rounded bg-gray-700 border-gray-600 text-blue-500">
+                </label>
+                <label class="flex items-center justify-between cursor-pointer">
+                  <span class="text-sm text-gray-300">Compressed signal (tanh)</span>
+                  <input type="checkbox" id="opt-compressedSignal" checked onchange="builderRecompute()" class="rounded bg-gray-700 border-gray-600 text-blue-500">
+                </label>
+                <label class="flex items-center justify-between cursor-pointer">
+                  <span class="text-sm text-gray-300">Neutral unclassified</span>
+                  <input type="checkbox" id="opt-neutralUnclassified" checked onchange="builderRecompute()" class="rounded bg-gray-700 border-gray-600 text-blue-500">
+                </label>
+                <label class="flex items-center justify-between cursor-pointer">
+                  <span class="text-sm text-gray-300">Event deduplication</span>
+                  <input type="checkbox" id="opt-eventDedup" checked onchange="builderRecompute()" class="rounded bg-gray-700 border-gray-600 text-blue-500">
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- ═══ METHODOLOGY PAGE ═══ -->
     <div id="page-methodology" class="page space-y-8">
       <h1 class="text-xl font-light text-gray-300 tracking-wide">Methodology</h1>
@@ -130,6 +227,7 @@
   <script src="js/app.js"></script>
   <script src="js/chart.js"></script>
   <script src="js/table.js"></script>
+  <script src="js/builder.js"></script>
 
 </body>
 </html>

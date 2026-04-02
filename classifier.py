@@ -78,12 +78,12 @@ def classify_market(market: Market) -> Classification:
             asset=asset,
         )
 
-    # Default: treat high probability as bullish (most crypto markets are "will X good thing happen")
+    # Default: unclassified markets are neutral (no directional signal)
     return Classification(
         market_id=market.id,
         question=market.question,
         signal_type="unclassified",
-        polarity="bullish",
+        polarity="neutral",
         method="keyword",
         asset=asset,
     )

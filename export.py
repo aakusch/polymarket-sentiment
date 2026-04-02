@@ -193,6 +193,7 @@ def export_latest(db: Database, timeseries: list[dict]) -> dict:
         cat = SUB_CATEGORY_MAP.get(m["classification"], "unclassified")
         entry = {
             "id": m["market_id"],
+            "event_id": m.get("event_id") or m["market_id"],
             "question": m["question"],
             "classification": m["classification"],
             "category": cat,
@@ -233,11 +234,11 @@ def export_meta() -> dict:
     """Build meta.json — static methodology reference."""
     return {
         "sector": "crypto",
-        "version": "2.0",
+        "version": "2.1",
         "methodology": {
             "signal": {
-                "formula": "(probability - 0.5) x 2",
-                "description": "Each market's YES price maps to a directional signal from -1 (max bearish) to +1 (max bullish). For bearish-polarity markets (e.g. 'Will BTC crash?'), the signal is inverted. Neutral-polarity markets (e.g. price ranges) contribute weight but signal=0.",
+                "formula": "tanh(K x (probability - 0.5)), K=3.0",
+                "description": "Each market's YES price maps to a directional signal from -1 to +1 using a tanh compression curve (K=3.0). This concentrates sensitivity near 50% where real uncertainty lives, and compresses extreme aspirational targets that would otherwise register as extreme bearish. For bearish-polarity markets the input is inverted. Neutral-polarity and unclassified markets contribute weight but signal=0.",
             },
             "weight": {
                 "formula": "0.4 x log(volume) + 0.3 x log(liquidity) + 0.2 x log(OI) + 0.1 x time_decay",
@@ -250,8 +251,8 @@ def export_meta() -> dict:
                 },
             },
             "composite": {
-                "formula": "SUM(signal_i x weight_i) / SUM(weight_i)",
-                "description": "The composite score is a weighted average of all individual market signals, normalized to a 0-100 scale where 50 is neutral.",
+                "formula": "SUM(signal_i x weight_i) / SUM(weight_i), event-deduped",
+                "description": "Markets are grouped by event_id; each event contributes one consolidated signal (intra-group weighted average). The composite is the weighted average of these consolidated event signals, normalized to 0-100 where 50 is neutral. This prevents event clusters (e.g. 10+ tiered FDV markets) from flooding the average.",
             },
             "categories": {
                 "price_targets": {
@@ -272,8 +273,8 @@ def export_meta() -> dict:
                 },
             },
             "noise_filtering": {
-                "description": "Short-duration binary option markets (e.g. 5-minute 'Up or Down' bets) are excluded from scoring. These are coin-flip markets that dilute the composite signal.",
-                "criteria": "Events matching 'Up or Down' title pattern with duration < 24 hours",
+                "description": "Short-duration binary option markets (e.g. 5-minute 'Up or Down' bets) are excluded from scoring at both the discovery and scoring layers. Markets with probability <= 2% or >= 98% are filtered as effectively resolved.",
+                "criteria": "Question matching 'Up or Down' pattern, or probability outside [0.02, 0.98]",
             },
             "asset_classification": {
                 "description": "Markets are tagged with the primary asset (BTC, ETH, SOL, etc.) using regex pattern matching on the market question. Unmatched markets are tagged 'OTHER'.",
