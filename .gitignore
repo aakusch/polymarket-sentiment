@@ -24,3 +24,6 @@ node_modules/
 migrate.py
 .vercel
 .env.local
+
+# Stale copies
+dashboard/

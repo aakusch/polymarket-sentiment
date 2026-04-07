@@ -15,6 +15,7 @@ from db import Database
 log = logging.getLogger(__name__)
 
 SUB_CATEGORY_MAP = {
+    # Crypto
     "price_above": "price_targets",
     "price_below": "price_targets",
     "price_range": "price_targets",
@@ -23,6 +24,40 @@ SUB_CATEGORY_MAP = {
     "adoption": "adoption",
     "event_positive": "events",
     "event_negative": "events",
+    # Stocks
+    "earnings_positive": "earnings",
+    "earnings_negative": "earnings",
+    "corporate_positive": "corporate",
+    "corporate_negative": "corporate",
+    # Economy
+    "monetary_dovish": "monetary_policy",
+    "monetary_hawkish": "monetary_policy",
+    "inflation_rising": "inflation",
+    "inflation_falling": "inflation",
+    "growth_positive": "growth",
+    "growth_negative": "growth",
+    "employment_positive": "employment",
+    "employment_negative": "employment",
+    # Politics
+    "favors_incumbent": "favors_incumbent",
+    "favors_challenger": "favors_challenger",
+    "legislative_positive": "legislative",
+    "legislative_negative": "legislative",
+    "geopolitical_event": "geopolitical",
+}
+
+SECTOR_CATEGORIES = {
+    "crypto": ["price_targets", "regulatory", "adoption", "events", "other"],
+    "stocks": ["price_targets", "earnings", "corporate", "other"],
+    "economy": ["monetary_policy", "inflation", "growth", "employment", "other"],
+    "politics": ["favors_incumbent", "favors_challenger", "legislative", "geopolitical", "other"],
+}
+
+SECTOR_REF_KEYS = {
+    "crypto": ["btc_price", "fear_greed"],
+    "stocks": ["spx_price", "vix_price"],
+    "economy": ["us10y_yield", "fed_rate", "unemployment"],
+    "politics": [],
 }
 
 CATEGORY_ORDER = ["price_targets", "regulatory", "adoption", "events"]
@@ -138,25 +173,55 @@ def export_latest(db: Database, sector: str) -> dict:
     return result
 
 
-def export_sandbox(db: Database) -> dict:
+def _build_category_case_sql() -> str:
+    """Build a SQL CASE expression mapping classification -> category."""
+    return """
+        CASE
+            WHEN classification IN ('price_above','price_below','price_range') THEN 'price_targets'
+            WHEN classification IN ('regulatory_positive','regulatory_negative') THEN 'regulatory'
+            WHEN classification = 'adoption' THEN 'adoption'
+            WHEN classification IN ('event_positive','event_negative') THEN 'events'
+            WHEN classification IN ('earnings_positive','earnings_negative') THEN 'earnings'
+            WHEN classification IN ('corporate_positive','corporate_negative') THEN 'corporate'
+            WHEN classification IN ('monetary_dovish','monetary_hawkish') THEN 'monetary_policy'
+            WHEN classification IN ('inflation_rising','inflation_falling') THEN 'inflation'
+            WHEN classification IN ('growth_positive','growth_negative') THEN 'growth'
+            WHEN classification IN ('employment_positive','employment_negative') THEN 'employment'
+            WHEN classification = 'favors_incumbent' THEN 'favors_incumbent'
+            WHEN classification = 'favors_challenger' THEN 'favors_challenger'
+            WHEN classification IN ('legislative_positive','legislative_negative') THEN 'legislative'
+            WHEN classification = 'geopolitical_event' THEN 'geopolitical'
+            ELSE 'other'
+        END
+    """
+
+
+def export_sandbox(db: Database, sector: str = "crypto") -> dict:
     """Build sandbox.json — per-asset category timeseries for custom indicator sandbox."""
-    rows = db._select("""
+    ph = "%s" if db.is_postgres else "?"
+    cat_case = _build_category_case_sql()
+
+    # Category-level aggregates (existing behavior)
+    # For non-crypto sectors, allow asset='OTHER' since many markets won't match
+    # specific asset patterns (e.g. politics markets have no financial asset)
+    sector_filter = f"AND sector = {ph}" if sector != "crypto" else ""
+    if sector == "crypto":
+        base_filter = f"WHERE asset != 'OTHER' {sector_filter}"
+    else:
+        base_filter = f"WHERE 1=1 {sector_filter}"
+    params = [sector] if sector != "crypto" else []
+
+    rows = db._select(f"""
         SELECT date, asset,
-            CASE
-                WHEN classification IN ('price_above','price_below','price_range') THEN 'price_targets'
-                WHEN classification IN ('regulatory_positive','regulatory_negative') THEN 'regulatory'
-                WHEN classification = 'adoption' THEN 'adoption'
-                WHEN classification IN ('event_positive','event_negative') THEN 'events'
-                ELSE 'other'
-            END as cat,
+            {cat_case} as cat,
             SUM(sentiment_signal * weight) as ws,
             SUM(weight) as wt,
             COUNT(*) as n
         FROM market_snapshots
-        WHERE asset != 'OTHER'
+        {base_filter}
         GROUP BY date, asset, cat
         ORDER BY date, asset, cat
-    """)
+    """, params)
 
     # Build lookup: (asset, date, cat) -> {ws, wt, n}
     asset_date_sets: dict[str, set] = defaultdict(set)
@@ -170,20 +235,58 @@ def export_sandbox(db: Database) -> dict:
             "n": row["n"],
         }
 
-    # Only assets with >= 5 data points
-    qualified = {a for a, ds in asset_date_sets.items() if len(ds) >= 5}
+    # Per-market timeseries (for market-mode indicators)
+    market_rows = db._select(f"""
+        SELECT date, market_id, question, asset,
+            {cat_case} as cat,
+            sentiment_signal, weight, probability, volume_24h, end_date
+        FROM market_snapshots
+        {base_filter}
+        ORDER BY date, market_id
+    """, params)
 
-    # Reference prices (full date range)
+    # Build per-market timeseries: { asset: { market_id: { q, cat, ss[], wt[], end, prob, vol } } }
+    market_data: dict[str, dict[str, dict]] = defaultdict(lambda: defaultdict(lambda: {
+        "q": "", "cat": "", "ss": [], "wt": [], "_dates": [], "end": None, "prob": None, "vol": 0,
+    }))
+    for r in market_rows:
+        asset = r["asset"]
+        mid = r["market_id"]
+        md = market_data[asset][mid]
+        md["q"] = r["question"]
+        md["cat"] = r["cat"]
+        md["ss"].append(round(r["sentiment_signal"], 6) if r["sentiment_signal"] is not None else None)
+        md["wt"].append(round(r["weight"], 6) if r["weight"] is not None else None)
+        md["_dates"].append(r["date"])
+        # Keep latest probability, volume, end_date
+        if r.get("probability") is not None:
+            md["prob"] = round(float(r["probability"]), 4)
+        if r.get("volume_24h") is not None:
+            md["vol"] = round(float(r["volume_24h"]), 0)
+        if r.get("end_date"):
+            md["end"] = r["end_date"][:10] if r["end_date"] else None  # YYYY-MM-DD
+
+    # Only assets with enough data points (lower threshold for new sectors)
+    min_dates = 1 if sector != "crypto" else 5
+    qualified = {a for a, ds in asset_date_sets.items() if len(ds) >= min_dates}
+
+    # Reference prices (full date range) — include ALL columns so any "Test Against" works
     ref_prices = db.get_reference_prices()
     ref_dates = sorted(ref_prices.keys())
-    ref = {
-        "dates": ref_dates,
-        "btc_price": [ref_prices[d].get("btc_price") for d in ref_dates],
-        "fear_greed": [ref_prices[d].get("fear_greed") for d in ref_dates],
-    }
+    all_ref_keys = [
+        "btc_price", "fear_greed", "eth_price", "sol_price",
+        "spx_price", "ndx_price", "dji_price", "rut_price", "vix_price",
+        "us10y_yield", "us2y_yield", "dxy_price", "fed_rate", "unemployment",
+        "gold_price", "oil_price",
+    ]
+    ref: dict = {"dates": ref_dates}
+    for key in all_ref_keys:
+        vals = [ref_prices[d].get(key) for d in ref_dates]
+        if any(v is not None for v in vals):
+            ref[key] = vals
 
     # Build columnar arrays per asset
-    cats = ["price_targets", "regulatory", "adoption", "events", "other"]
+    cats = SECTOR_CATEGORIES.get(sector, SECTOR_CATEGORIES["crypto"])
     assets_out = {}
     for asset in sorted(qualified):
         dates = sorted(asset_date_sets[asset])
@@ -196,9 +299,35 @@ def export_sandbox(db: Database) -> dict:
                 wt.append(round(cd.get("wt", 0), 6))
                 n.append(cd.get("n", 0))
             cat_arrays[cat] = {"ws": ws, "wt": wt, "n": n}
-        assets_out[asset] = {"dates": dates, "cats": cat_arrays}
 
-    log.info("Sandbox: %d qualified assets, %d ref dates", len(qualified), len(ref_dates))
+        # Per-market data aligned to asset dates
+        markets_out = {}
+        date_idx = {d: i for i, d in enumerate(dates)}
+        for mid, md in market_data.get(asset, {}).items():
+            # Build aligned arrays
+            ss_aligned = [None] * len(dates)
+            wt_aligned = [None] * len(dates)
+            for j, d in enumerate(md["_dates"]):
+                idx = date_idx.get(d)
+                if idx is not None:
+                    ss_aligned[idx] = md["ss"][j]
+                    wt_aligned[idx] = md["wt"][j]
+            # Only include markets with at least some data
+            if any(s is not None for s in ss_aligned):
+                entry = {"q": md["q"], "cat": md["cat"], "ss": ss_aligned, "wt": wt_aligned}
+                if md["end"]:
+                    entry["end"] = md["end"]
+                if md["prob"] is not None:
+                    entry["prob"] = md["prob"]
+                if md["vol"]:
+                    entry["vol"] = md["vol"]
+                markets_out[mid] = entry
+
+        assets_out[asset] = {"dates": dates, "cats": cat_arrays, "markets": markets_out}
+
+    ref_included = [k for k in ref if k != 'dates']
+    log.info("Sandbox[%s]: %d qualified assets, %d ref dates, ref_keys=%s",
+             sector, len(qualified), len(ref_dates), ref_included)
     return {"ref": ref, "assets": assets_out}
 
 
@@ -231,8 +360,8 @@ def main(db_path: str | None, out_dir: str | None, sector: str, verbose: bool):
         log.info("Exporting latest snapshot for sector '%s'...", sector)
         latest_data = export_latest(db, sector)
 
-        log.info("Exporting sandbox data...")
-        sandbox_data = export_sandbox(db)
+        log.info("Exporting sandbox data for sector '%s'...", sector)
+        sandbox_data = export_sandbox(db, sector=sector)
 
     # Add generation timestamp
     latest_data["generated_at"] = now

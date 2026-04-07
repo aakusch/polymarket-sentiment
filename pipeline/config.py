@@ -16,7 +16,7 @@ CLOB_PRICES_HISTORY = f"{CLOB_BASE}/prices-history"
 # Rate limiting (conservative — actual limits are ~500/10s gamma, ~1000/10s clob)
 GAMMA_REQ_PER_SEC = 20
 CLOB_REQ_PER_SEC = 40
-REQUEST_TIMEOUT = 30.0
+REQUEST_TIMEOUT = 60.0
 
 # ── Scoring Constants ─────────────────────────────────────────────────────
 
@@ -59,6 +59,33 @@ SECTORS: dict[str, dict] = {
         ],
         "classification_rules": "CRYPTO_RULES",
     },
+    "stocks": {
+        "search_terms": [
+            "S&P 500", "stock market", "NASDAQ", "Tesla stock",
+            "NVIDIA", "earnings", "market crash", "dow jones", "IPO",
+            "Apple stock", "Microsoft stock", "Amazon stock",
+        ],
+        "tag_ids": [],
+        "classification_rules": "STOCK_RULES",
+    },
+    "economy": {
+        "search_terms": [
+            "inflation", "Federal Reserve", "interest rate", "GDP",
+            "unemployment", "recession", "CPI", "tariff",
+            "treasury", "jobs report", "economic growth",
+        ],
+        "tag_ids": [],
+        "classification_rules": "ECONOMY_RULES",
+    },
+    "politics": {
+        "search_terms": [
+            "Trump", "2026 election", "Senate", "Congress",
+            "House majority", "Supreme Court", "midterm",
+            "Democrat", "Republican", "presidential",
+        ],
+        "tag_ids": [],
+        "classification_rules": "POLITICS_RULES",
+    },
 }
 
 # ── Classification Keywords ───────────────────────────────────────────────
@@ -92,6 +119,52 @@ KEYWORD_RULES: list[tuple[list[str], str, str]] = [
     (["hack", "exploit", "collapse", "insolvency", "bankruptcy", "rug pull",
       "sell", "sells", "dump"],
      "event_negative", "bearish"),
+
+    # ── Stocks keyword rules ──────────────────────────────────────────────
+    # Earnings
+    (["beat earnings", "earnings beat", "earnings surprise", "revenue beat"],
+     "earnings_positive", "bullish"),
+    (["miss earnings", "earnings miss", "revenue miss", "profit warning"],
+     "earnings_negative", "bearish"),
+    # Corporate
+    (["merger", "acquisition", "buyback", "dividend increase", "stock split"],
+     "corporate_positive", "bullish"),
+    (["layoff", "downgrade", "delisted", "sec investigation", "recall"],
+     "corporate_negative", "bearish"),
+
+    # ── Economy keyword rules ─────────────────────────────────────────────
+    # Monetary policy
+    (["rate cut", "cut rates", "dovish", "pause rate", "easing"],
+     "monetary_dovish", "bullish"),
+    (["rate hike", "raise rates", "hawkish", "tightening", "restrictive"],
+     "monetary_hawkish", "bearish"),
+    # Inflation
+    (["inflation rise", "cpi increase", "inflation above", "price increase"],
+     "inflation_rising", "bearish"),
+    (["inflation fall", "cpi decrease", "inflation below", "disinflation"],
+     "inflation_falling", "bullish"),
+    # Growth
+    (["gdp growth", "economic growth", "expansion", "soft landing"],
+     "growth_positive", "bullish"),
+    (["recession", "contraction", "hard landing", "gdp decline", "slowdown"],
+     "growth_negative", "bearish"),
+    # Employment
+    (["jobs added", "unemployment fall", "unemployment below", "hiring"],
+     "employment_positive", "bullish"),
+    (["job losses", "unemployment rise", "unemployment above", "layoffs"],
+     "employment_negative", "bearish"),
+
+    # ── Politics keyword rules ────────────────────────────────────────────
+    (["reelected", "wins", "incumbent wins", "approval rating above"],
+     "favors_incumbent", "bullish"),
+    (["challenger wins", "upset", "loses seat", "approval rating below"],
+     "favors_challenger", "bearish"),
+    (["bill passes", "legislation signed", "bipartisan", "enacted"],
+     "legislative_positive", "bullish"),
+    (["bill fails", "vetoed", "filibuster", "gridlock", "government shutdown"],
+     "legislative_negative", "bearish"),
+    (["war", "conflict", "sanctions imposed", "diplomatic crisis", "invasion"],
+     "geopolitical_event", "bearish"),
 ]
 
 # ── Asset Patterns ───────────────────────────────────────────────────────
@@ -112,6 +185,24 @@ ASSET_PATTERNS: dict[str, str] = {
     "ATOM": r"\b(cosmos|atom)\b",
     "NEAR": r"\b(near protocol|near)\b",
     "SUI": r"\b(sui)\b",
+}
+
+# Stock / macro asset patterns (used for stocks & economy sectors)
+STOCK_ASSET_PATTERNS: dict[str, str] = {
+    "SPX": r"\b(s&p|spx|sp500|s&p 500)\b",
+    "NDX": r"\b(nasdaq|ndx|nasdaq.100)\b",
+    "TSLA": r"\b(tesla|tsla)\b",
+    "NVDA": r"\b(nvidia|nvda)\b",
+    "AAPL": r"\b(apple|aapl)\b",
+    "MSFT": r"\b(microsoft|msft)\b",
+    "AMZN": r"\b(amazon|amzn)\b",
+    "DJI": r"\b(dow jones|dow|djia)\b",
+    "VIX": r"\b(vix|volatility index)\b",
+    "RATES": r"\b(interest rate|fed funds|federal funds)\b",
+    "YIELD": r"\b(treasury|10.year|bond yield)\b",
+    "CPI": r"\b(cpi|consumer price)\b",
+    "GDP": r"\b(gdp|gross domestic)\b",
+    "JOBS": r"\b(unemployment|jobs report|nonfarm|payroll)\b",
 }
 
 # ── Noise Filtering ──────────────────────────────────────────────────────

@@ -90,7 +90,9 @@ const SECTORS = {
     referenceData: {
       priceKey: 'spx_price',
       priceLabel: 'S&P 500',
-      externalSignals: [],
+      externalSignals: [
+        { id: 'vix', label: 'VIX', key: 'vix_price' },
+      ],
     },
     presets: {
       'Default': {
@@ -122,9 +124,12 @@ const SECTORS = {
       other:           { label: 'Other',            accent: '#6b7280' },
     },
     referenceData: {
-      priceKey: null,
-      priceLabel: null,
-      externalSignals: [],
+      priceKey: 'us10y_yield',
+      priceLabel: '10Y Treasury',
+      externalSignals: [
+        { id: 'fed_rate', label: 'Fed Rate', key: 'fed_rate' },
+        { id: 'unemployment', label: 'Unemployment', key: 'unemployment' },
+      ],
     },
     presets: {
       'Default': {
@@ -145,6 +150,32 @@ const SECTORS = {
 };
 
 const SECTOR_ORDER = ['crypto', 'stocks', 'economy', 'politics'];
+
+// All available reference assets for cross-sector "Test Against" dropdown
+const ALL_REFERENCE_ASSETS = [
+  // Crypto
+  { id: 'btc_price', label: 'BTC', sector: 'crypto', format: '$', key: 'btc_price' },
+  { id: 'eth_price', label: 'ETH', sector: 'crypto', format: '$', key: 'eth_price' },
+  { id: 'sol_price', label: 'SOL', sector: 'crypto', format: '$', key: 'sol_price' },
+  { id: 'fear_greed', label: 'Fear & Greed', sector: 'crypto', format: '0-100', key: 'fear_greed' },
+  // Equities
+  { id: 'spx_price', label: 'S&P 500', sector: 'stocks', format: '$', key: 'spx_price' },
+  { id: 'ndx_price', label: 'Nasdaq 100', sector: 'stocks', format: '$', key: 'ndx_price' },
+  { id: 'dji_price', label: 'Dow Jones', sector: 'stocks', format: '$', key: 'dji_price' },
+  { id: 'rut_price', label: 'Russell 2000', sector: 'stocks', format: '$', key: 'rut_price' },
+  { id: 'vix_price', label: 'VIX', sector: 'stocks', format: '#', key: 'vix_price' },
+  // Rates & Macro
+  { id: 'us10y_yield', label: '10Y Treasury', sector: 'economy', format: '%', key: 'us10y_yield' },
+  { id: 'us2y_yield', label: '2Y Treasury', sector: 'economy', format: '%', key: 'us2y_yield' },
+  { id: 'dxy_price', label: 'US Dollar (DXY)', sector: 'economy', format: '#', key: 'dxy_price' },
+  { id: 'fed_rate', label: 'Fed Rate', sector: 'economy', format: '%', key: 'fed_rate' },
+  { id: 'unemployment', label: 'Unemployment', sector: 'economy', format: '%', key: 'unemployment' },
+  // Commodities
+  { id: 'gold_price', label: 'Gold', sector: 'commodities', format: '$', key: 'gold_price' },
+  { id: 'oil_price', label: 'Oil (WTI)', sector: 'commodities', format: '$', key: 'oil_price' },
+  // None
+  { id: 'none', label: 'None', sector: null, format: null, key: null },
+];
 
 // ── Chart Colors (moved from chart.js) ────────────────────────────────────
 
@@ -169,7 +200,20 @@ const LINE_COLORS = {
   inflation:           { border: '#ef4444', bg: 'rgba(239,68,68,0.05)' },
   growth:              { border: '#22c55e', bg: 'rgba(34,197,94,0.05)' },
   employment:          { border: '#f97316', bg: 'rgba(249,115,22,0.05)' },
+  eth_price:           { border: '#6366f1', bg: 'rgba(99,102,241,0.05)' },
+  sol_price:           { border: '#14b8a6', bg: 'rgba(20,184,166,0.05)' },
   spx_price:           { border: '#9ca3af', bg: 'rgba(156,163,175,0.05)' },
+  ndx_price:           { border: '#818cf8', bg: 'rgba(129,140,248,0.05)' },
+  dji_price:           { border: '#60a5fa', bg: 'rgba(96,165,250,0.05)' },
+  rut_price:           { border: '#a78bfa', bg: 'rgba(167,139,250,0.05)' },
+  vix_price:           { border: '#fbbf24', bg: 'rgba(251,191,36,0.05)' },
+  us10y_yield:         { border: '#9ca3af', bg: 'rgba(156,163,175,0.05)' },
+  us2y_yield:          { border: '#6b7280', bg: 'rgba(107,114,128,0.05)' },
+  dxy_price:           { border: '#34d399', bg: 'rgba(52,211,153,0.05)' },
+  fed_rate:            { border: '#3b82f6', bg: 'rgba(59,130,246,0.05)' },
+  unemployment:        { border: '#f97316', bg: 'rgba(249,115,22,0.05)' },
+  gold_price:          { border: '#eab308', bg: 'rgba(234,179,8,0.05)' },
+  oil_price:           { border: '#78716c', bg: 'rgba(120,113,108,0.05)' },
 };
 
 // ── Neutral Line Plugin (moved from chart.js) ────────────────────────────

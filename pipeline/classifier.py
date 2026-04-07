@@ -6,19 +6,35 @@ import logging
 import re
 from dataclasses import dataclass
 
-from config import ASSET_PATTERNS, KEYWORD_RULES
+from config import ASSET_PATTERNS, STOCK_ASSET_PATTERNS, KEYWORD_RULES
 from discovery import Market
 
 log = logging.getLogger(__name__)
 
 
-def extract_asset(question: str) -> str:
-    """Extract the primary asset from a market question. Returns ticker or 'OTHER'."""
+def extract_asset(question: str, sector: str = "crypto") -> str:
+    """Extract the primary asset from a market question. Returns ticker or 'OTHER'.
+
+    For non-crypto sectors, also checks STOCK_ASSET_PATTERNS and falls back to
+    a sector default instead of 'OTHER'.
+    """
     q_lower = question.lower()
+    # Always check crypto patterns
     for ticker, pattern in ASSET_PATTERNS.items():
         if re.search(pattern, q_lower):
             return ticker
-    return "OTHER"
+    # For non-crypto sectors, also check stock/macro patterns
+    if sector != "crypto":
+        for ticker, pattern in STOCK_ASSET_PATTERNS.items():
+            if re.search(pattern, q_lower):
+                return ticker
+    # Sector-specific default for unmatched markets
+    _SECTOR_DEFAULT_ASSET = {
+        "stocks": "MARKET",
+        "economy": "MACRO",
+        "politics": "GOV",
+    }
+    return _SECTOR_DEFAULT_ASSET.get(sector, "OTHER")
 
 
 @dataclass
@@ -49,9 +65,9 @@ def classify_by_keywords(question: str) -> tuple[str, str] | None:
     return None
 
 
-def classify_market(market: Market) -> Classification:
+def classify_market(market: Market, sector: str = "crypto") -> Classification:
     """Classify a single market. Uses keyword rules, falls back to neutral default."""
-    asset = extract_asset(market.question)
+    asset = extract_asset(market.question, sector=sector)
 
     # Check manual overrides first
     if market.id in MANUAL_OVERRIDES:
@@ -89,13 +105,13 @@ def classify_market(market: Market) -> Classification:
     )
 
 
-def classify_batch(markets: list[Market]) -> dict[str, Classification]:
+def classify_batch(markets: list[Market], sector: str = "crypto") -> dict[str, Classification]:
     """Classify all markets. Returns dict keyed by market ID."""
     classifications: dict[str, Classification] = {}
     method_counts: dict[str, int] = {}
 
     for m in markets:
-        c = classify_market(m)
+        c = classify_market(m, sector=sector)
         classifications[m.id] = c
         method_counts[c.method] = method_counts.get(c.method, 0) + 1
 

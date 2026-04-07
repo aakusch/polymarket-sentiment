@@ -46,7 +46,7 @@ async def run_snapshot(
 
     # 2. Classify markets
     log.info("Step 2/5: Classifying markets...")
-    classifications = classify_batch(all_markets)
+    classifications = classify_batch(all_markets, sector=sector)
 
     if use_llm:
         classifications = await classify_batch_with_llm(all_markets, classifications)
@@ -72,10 +72,10 @@ async def run_snapshot(
         db.save_snapshot(snapshot_date, sector, score)
         db.save_classifications(classifications)
 
-        # 6. Fetch reference prices (BTC + Fear & Greed)
-        log.info("Step 6/6: Updating reference prices...")
+        # 6. Fetch reference prices (sector-appropriate feeds)
+        log.info("Step 6/6: Updating reference prices for sector '%s'...", sector)
         try:
-            await update_reference_prices(db, days=90)
+            await update_reference_prices(db, sector=sector, days=365)
         except Exception as e:
             log.warning("Reference price update failed (non-fatal): %s", e)
 

@@ -3,16 +3,15 @@
 const sectorDataCache = {};
 const assetDataCache = {};  // { "crypto:BTC": assetPayload }
 
-function buildRefMap(ref, sector) {
+function buildRefMap(ref) {
   const refMap = {};
   if (!ref?.dates) return refMap;
+  // Extract ALL ref keys present in the data (not just sector-declared ones)
+  const keys = Object.keys(ref).filter(k => k !== 'dates');
   ref.dates.forEach((d, i) => {
     const entry = {};
-    if (sector.referenceData.priceKey) {
-      entry[sector.referenceData.priceKey] = ref[sector.referenceData.priceKey]?.[i];
-    }
-    for (const sig of sector.referenceData.externalSignals) {
-      entry[sig.key] = ref[sig.key]?.[i];
+    for (const k of keys) {
+      entry[k] = ref[k]?.[i];
     }
     refMap[d] = entry;
   });
@@ -27,7 +26,7 @@ async function loadSectorData(sectorId) {
 
   try {
     // Try manifest-based loading first (per-asset split files)
-    const manifestUrl = sector.dataFiles.sandbox.replace('sandbox.json', 'sandbox-manifest.json');
+    const manifestUrl = sector.dataFiles.sandbox.replace(/sandbox(-\w+)?\.json$/, 'sandbox$1-manifest.json');
     let sandbox, latest, refMap;
 
     try {
@@ -43,7 +42,7 @@ async function loadSectorData(sectorId) {
 
       if (defaultAsset && manifest.assets[defaultAsset]) {
         const assetPayload = await fetch(manifest.assets[defaultAsset].file).then(r => r.json());
-        refMap = buildRefMap(assetPayload.ref, sector);
+        refMap = buildRefMap(assetPayload.ref);
 
         // Build sandbox structure from single asset
         sandbox = {
@@ -64,7 +63,7 @@ async function loadSectorData(sectorId) {
       ]);
       sandbox = sandboxData;
       latest = latestData;
-      refMap = buildRefMap(sandbox.ref, sector);
+      refMap = buildRefMap(sandbox.ref);
     }
 
     sectorDataCache[sectorId] = { sandbox, latest, refMap };
@@ -100,6 +99,15 @@ async function loadAssetData(sectorId, asset) {
   } catch (e) {
     console.error(`Failed to load asset data for ${asset}:`, e);
     return false;
+  }
+}
+
+// ── Multi-sector loading helper ────────────────────────────────────────
+
+async function ensureSectorsLoaded(sectorIds) {
+  const toLoad = sectorIds.filter(s => !sectorDataCache[s] && SECTORS[s]?.available);
+  if (toLoad.length > 0) {
+    await Promise.all(toLoad.map(s => loadSectorData(s)));
   }
 }
 
@@ -146,9 +154,6 @@ function handleRoute() {
       break;
     case 'builder':
       renderBuilderPage();
-      break;
-    case 'explore':
-      if (typeof renderExplorePage === 'function') renderExplorePage();
       break;
     case 'api':
       if (typeof renderApiPanel === 'function') renderApiPanel();

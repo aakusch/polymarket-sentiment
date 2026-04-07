@@ -15,25 +15,51 @@ const SECTOR_CATEGORIES = {
 async function computeIndicator(indicator) {
   const sql = getDb();
   const asset = indicator.asset || 'BTC';
+  const referenceAsset = indicator.referenceAsset || null; // cross-sector "Test Against"
   const fgEnabled = indicator.fg_enabled ?? indicator.fgEnabled ?? false;
   const fgWeight = (indicator.fg_weight ?? indicator.fgWeight ?? 30) / 100;
 
   // Detect mode: market-mode if indicator has markets field
-  const markets = indicator.markets || (indicator.weights?.markets) || null;
-  const isMarketMode = !!markets && typeof markets === 'object' && !Array.isArray(markets)
-    && Object.keys(markets).length > 0;
+  const rawMarkets = indicator.markets || (indicator.weights?.markets) || null;
+  const isMarketMode = !!rawMarkets && typeof rawMarkets === 'object' && !Array.isArray(rawMarkets)
+    && Object.keys(rawMarkets).length > 0;
+
+  // Normalize market config: support { mid: number }, { mid: { weight, sector } }, { mid: { w, flip } }
+  let markets = null;
+  let marketFlips = {};
+  if (isMarketMode) {
+    markets = {};
+    for (const [mid, val] of Object.entries(rawMarkets)) {
+      if (typeof val === 'number') {
+        markets[mid] = val;
+      } else {
+        markets[mid] = val?.w ?? val?.weight ?? 100;
+        if (val?.flip) marketFlips[mid] = true;
+      }
+    }
+  }
+
+  // Detect cross-sector: any market has explicit sector info
+  const hasCrossSector = isMarketMode && Object.values(rawMarkets).some(v => typeof v === 'object' && v?.sector);
 
   let dateMap, allDates;
 
   if (isMarketMode) {
-    // Per-market query
+    // Per-market query — cross-sector skips asset filter
     const marketIds = Object.keys(markets);
-    const rows = await sql`
-      SELECT date, market_id, sentiment_signal, weight
-      FROM market_snapshots
-      WHERE asset = ${asset} AND market_id = ANY(${marketIds})
-      ORDER BY date
-    `;
+    const rows = hasCrossSector
+      ? await sql`
+          SELECT date, market_id, sentiment_signal, weight
+          FROM market_snapshots
+          WHERE market_id = ANY(${marketIds})
+          ORDER BY date
+        `
+      : await sql`
+          SELECT date, market_id, sentiment_signal, weight
+          FROM market_snapshots
+          WHERE asset = ${asset} AND market_id = ANY(${marketIds})
+          ORDER BY date
+        `;
 
     dateMap = {};
     allDates = new Set();
@@ -85,16 +111,22 @@ async function computeIndicator(indicator) {
     }
   }
 
-  // Fetch reference prices
+  // Fetch reference prices (all columns for cross-sector support)
   const refs = await sql`
-    SELECT date, btc_price, fear_greed
+    SELECT date, btc_price, fear_greed, eth_price, sol_price,
+      spx_price, ndx_price, dji_price, rut_price, vix_price,
+      us10y_yield, us2y_yield, dxy_price, fed_rate, unemployment,
+      gold_price, oil_price
     FROM reference_prices
     ORDER BY date
   `;
   const refMap = {};
   for (const r of refs) {
-    refMap[r.date] = { btc_price: r.btc_price, fear_greed: r.fear_greed };
+    refMap[r.date] = r;
   }
+
+  // Determine which reference key to use for price overlay
+  const refPriceKey = referenceAsset || (asset === 'BTC' ? 'btc_price' : 'btc_price');
 
   const dates = [...allDates].sort();
   const scores = [];
@@ -111,7 +143,8 @@ async function computeIndicator(indicator) {
         const m = mktData[mid];
         if (!m) continue;
         const w = userWeight / 100;
-        num += w * m.ss * m.wt;
+        const sign = marketFlips[mid] ? -1 : 1;
+        num += w * sign * m.ss * m.wt;
         den += w * m.wt;
       }
 
@@ -124,7 +157,7 @@ async function computeIndicator(indicator) {
       }
 
       scores.push(score != null ? Math.round(score * 10) / 10 : null);
-      prices.push(ref?.btc_price != null ? parseFloat(ref.btc_price) : null);
+      prices.push(ref?.[refPriceKey] != null ? parseFloat(ref[refPriceKey]) : null);
       fgValues.push(fg);
     }
   } else {
@@ -155,7 +188,7 @@ async function computeIndicator(indicator) {
       }
 
       scores.push(score != null ? Math.round(score * 10) / 10 : null);
-      prices.push(ref?.btc_price != null ? parseFloat(ref.btc_price) : null);
+      prices.push(ref?.[refPriceKey] != null ? parseFloat(ref[refPriceKey]) : null);
       fgValues.push(fg);
 
       // Category breakdown for latest date

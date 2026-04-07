@@ -164,11 +164,19 @@ class Discoverer:
         self.sector_cfg = SECTORS[sector]
         self._semaphore = asyncio.Semaphore(GAMMA_REQ_PER_SEC)
 
-    async def _get(self, client: httpx.AsyncClient, url: str, params: dict) -> dict | list:
+    async def _get(self, client: httpx.AsyncClient, url: str, params: dict, retries: int = 3) -> dict | list:
         async with self._semaphore:
-            resp = await client.get(url, params=params, timeout=REQUEST_TIMEOUT)
-            resp.raise_for_status()
-            return resp.json()
+            for attempt in range(retries):
+                try:
+                    resp = await client.get(url, params=params, timeout=REQUEST_TIMEOUT)
+                    resp.raise_for_status()
+                    return resp.json()
+                except (httpx.TimeoutException, httpx.ConnectError) as e:
+                    if attempt == retries - 1:
+                        raise
+                    wait = 2 ** attempt
+                    log.warning("Request failed (attempt %d/%d): %s — retrying in %ds", attempt + 1, retries, e, wait)
+                    await asyncio.sleep(wait)
 
     async def _search_term(self, client: httpx.AsyncClient, term: str) -> list[dict]:
         """Search for events by keyword. Returns up to 5 events (API limit)."""
@@ -199,12 +207,43 @@ class Discoverer:
             offset += limit
         return all_events[:max_events]
 
+    async def _fetch_all_active(
+        self, client: httpx.AsyncClient, *, max_events: int = 500, min_volume: float = 50,
+    ) -> list[dict]:
+        """Fetch ALL active events sorted by 24h volume, stopping when volume drops below threshold."""
+        all_events: list[dict] = []
+        offset = 0
+        limit = 50
+        while len(all_events) < max_events:
+            params = {
+                "limit": limit, "offset": offset,
+                "active": "true", "order": "volume24hr", "ascending": "false",
+            }
+            batch = await self._get(client, GAMMA_EVENTS, params)
+            if not isinstance(batch, list) or len(batch) == 0:
+                break
+            # Stop when volume drops below threshold
+            last_vol = float(batch[-1].get("volume24hr", 0) or 0)
+            all_events.extend(batch)
+            if last_vol < min_volume or len(batch) < limit:
+                break
+            offset += limit
+        log.info("Bulk fetch: %d active events (stopped at offset %d)", len(all_events), offset)
+        return all_events
+
     async def discover(self, *, active_only: bool = True) -> list[Event]:
         """Run all discovery strategies and return deduplicated events."""
         events_by_id: dict[str, dict] = {}
 
         async with httpx.AsyncClient() as client:
-            # Search-based discovery (all terms in parallel)
+            # Primary: bulk fetch ALL active events by volume
+            bulk_events = await self._fetch_all_active(client)
+            for raw_event in bulk_events:
+                eid = str(raw_event.get("id", ""))
+                if eid:
+                    events_by_id[eid] = raw_event
+
+            # Supplementary: search-based discovery for niche terms
             search_tasks = [
                 self._search_term(client, term)
                 for term in self.sector_cfg["search_terms"]
@@ -220,7 +259,7 @@ class Discoverer:
                     if eid and eid not in events_by_id:
                         events_by_id[eid] = raw_event
 
-            # Tag-based discovery (all tags in parallel)
+            # Supplementary: tag-based discovery
             tag_tasks = [
                 self._fetch_tag_events(client, tag_id, active_only=active_only)
                 for tag_id in self.sector_cfg["tag_ids"]
