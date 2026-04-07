@@ -20,23 +20,84 @@ jobs:
           cache: 'pip'
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r pipeline/requirements.txt
 
-      - name: Run snapshot
+      - name: Run snapshot (crypto)
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: python3 snapshot.py --sector crypto --skip-order-books -v
+        run: cd pipeline && python3 snapshot.py --sector crypto --skip-order-books -v
 
-      - name: Export dashboard JSON
+      - name: Run snapshot (politics)
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: python3 export.py -v
+        run: cd pipeline && python3 snapshot.py --sector politics --skip-order-books -v || echo "Politics snapshot failed (non-critical)"
+
+      - name: Run snapshot (stocks)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: cd pipeline && python3 snapshot.py --sector stocks --skip-order-books -v || echo "Stocks snapshot failed (non-critical)"
+
+      - name: Run snapshot (economy)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: cd pipeline && python3 snapshot.py --sector economy --skip-order-books -v || echo "Economy snapshot failed (non-critical)"
+
+      - name: Export dashboard JSON (crypto)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: cd pipeline && python3 export.py --sector crypto -v
+
+      - name: Export dashboard JSON (politics)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: cd pipeline && python3 export.py --sector politics -v || echo "Politics export failed (non-critical)"
+
+      - name: Export dashboard JSON (stocks)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: cd pipeline && python3 export.py --sector stocks -v || echo "Stocks export failed (non-critical)"
+
+      - name: Export dashboard JSON (economy)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: cd pipeline && python3 export.py --sector economy -v || echo "Economy export failed (non-critical)"
+
+      - name: Update latest_score for public indicators
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          python3 -c "
+          import os, psycopg2
+          conn = psycopg2.connect(os.environ['DATABASE_URL'])
+          cur = conn.cursor()
+          cur.execute('''
+            UPDATE indicators SET latest_score = sub.score FROM (
+              SELECT i.id, (
+                SELECT ROUND(((SUM(ms.sentiment_signal * ms.weight * (m.value::float/100)) /
+                  NULLIF(SUM(ms.weight * (m.value::float/100)), 0)) + 1) * 50, 1)
+                FROM jsonb_each_text(i.markets) m
+                JOIN market_snapshots ms ON ms.market_id = m.key AND ms.asset = i.asset
+                WHERE ms.date = (SELECT MAX(date) FROM market_snapshots WHERE asset = i.asset)
+              ) as score
+              FROM indicators i WHERE i.is_public = true AND i.markets IS NOT NULL
+            ) sub WHERE indicators.id = sub.id AND sub.score IS NOT NULL
+          ''')
+          conn.commit()
+          print(f'Updated {cur.rowcount} indicators')
+          conn.close()
+          " 2>&1 || echo "latest_score update skipped (non-critical)"
+
+      - name: Check alerts
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+        run: cd pipeline && python3 check_alerts.py -v || echo "Alert check failed (non-critical)"
 
       - name: Commit and push updated data
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add dashboard/data/
+          git add public/data/
           if git diff --cached --quiet; then
             echo "No changes to commit"
           else

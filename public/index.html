@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en" class="bg-gray-950">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Polymarket Sentiment Indicators</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+  <script src="https://unpkg.com/@solana/web3.js@1/lib/index.iife.min.js"></script>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; }
+    .tabular-nums { font-variant-numeric: tabular-nums; }
+    .page { display: none; }
+    .page.active { display: block; }
+    .nav-link { transition: color 0.15s, border-color 0.15s; }
+    .nav-link.active { color: #e5e7eb; border-bottom-color: #60a5fa; }
+    .sparkline { display: inline-block; vertical-align: middle; }
+    input[type=range] { -webkit-appearance: none; background: transparent; }
+    input[type=range]::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: #1f2937; }
+    input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; margin-top: -5px; cursor: pointer; }
+    input[type=range]::-moz-range-track { height: 4px; border-radius: 2px; background: #1f2937; border: 0; }
+    input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; border: 0; cursor: pointer; }
+    details summary::-webkit-details-marker { display: none; }
+    details summary { list-style: none; }
+    .ind-table { width: 100%; border-collapse: collapse; }
+    .ind-table th, .ind-table td { text-align: left; white-space: nowrap; }
+    .ind-table tbody tr { border-bottom: 1px solid rgba(55,65,81,0.3); }
+    .ind-table tbody tr:last-child { border-bottom: none; }
+    .ind-table tbody tr:hover { background: rgba(31,41,55,0.3); }
+  </style>
+</head>
+<body class="bg-gray-950 text-gray-200 min-h-screen">
+
+  <!-- Top Navigation -->
+  <nav class="sticky top-0 z-50 bg-gray-950/95 backdrop-blur border-b border-gray-800/50">
+    <div class="max-w-7xl mx-auto px-4">
+      <div class="flex items-center justify-between h-14">
+        <div class="flex items-center gap-1">
+          <span class="text-sm font-semibold text-gray-300 mr-4 hidden sm:inline">PMSI</span>
+          <a href="#indicators" data-nav="indicators" class="nav-link px-3 py-4 text-sm text-gray-500 border-b-2 border-transparent hover:text-gray-300">Indicators</a>
+          <a href="#builder" data-nav="builder" class="nav-link px-3 py-4 text-sm text-gray-500 border-b-2 border-transparent hover:text-gray-300">Builder</a>
+          <a href="#explore" data-nav="explore" class="nav-link px-3 py-4 text-sm text-gray-500 border-b-2 border-transparent hover:text-gray-300">Explore</a>
+          <a href="#api" data-nav="api" class="nav-link px-3 py-4 text-sm text-gray-500 border-b-2 border-transparent hover:text-gray-300">API</a>
+        </div>
+        <div class="flex items-center gap-3">
+          <div id="nav-score" class="text-sm tabular-nums text-gray-500"></div>
+          <div id="auth-area"></div>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <div class="max-w-7xl mx-auto px-4 py-6">
+
+    <!-- INDICATORS PAGE -->
+    <div id="page-indicators" class="page space-y-8">
+      <div class="flex items-center justify-between">
+        <h1 class="text-xl font-light text-gray-300 tracking-wide">Indicators</h1>
+      </div>
+      <div id="indicators-sectors"></div>
+      <!-- Comparison overlay chart (hidden until 2+ indicators selected) -->
+      <div id="comparison-panel" class="hidden mt-6 bg-gray-900/50 rounded-2xl p-6 border border-gray-800/50">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-sm font-medium text-gray-300">Indicator Comparison</h3>
+          <button onclick="comparisonState.selected.clear(); updateComparisonUI();" class="text-xs text-gray-500 hover:text-gray-300">Clear</button>
+        </div>
+        <div style="height:280px"><canvas id="comparison-chart"></canvas></div>
+      </div>
+    </div>
+
+    <!-- BUILDER PAGE -->
+    <div id="page-builder" class="page">
+
+      <!-- Toolbar -->
+      <div class="flex items-center justify-between mb-6">
+        <div class="flex items-center gap-3">
+          <div id="builder-sector-pills" class="flex gap-1 flex-wrap"></div>
+          <span class="text-gray-700">|</span>
+          <div id="builder-assets" class="flex gap-1 flex-wrap"></div>
+        </div>
+        <div class="flex items-center gap-2">
+          <div class="relative">
+            <button onclick="toggleBuilderLoadMenu()" class="px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200 transition-colors">
+              Load &#9662;
+            </button>
+            <div id="builder-load-menu" class="hidden absolute right-0 mt-1 w-56 bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-10 py-1"></div>
+          </div>
+          <button onclick="saveBuilderIndicator()" class="px-4 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-500 transition-colors">Save</button>
+        </div>
+      </div>
+
+      <!-- Main: Chart + Controls side by side on desktop -->
+      <div class="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-6">
+
+        <!-- Left: Chart + Metrics -->
+        <div class="space-y-4">
+          <!-- Chart -->
+          <div class="bg-gray-900/40 rounded-xl p-5">
+            <div class="flex items-center justify-between mb-3">
+              <div id="builder-metrics" class="flex items-center gap-4"></div>
+              <div class="flex gap-1">
+                <button data-period="1W" onclick="setBuilderChartPeriod('1W')" class="px-2 py-0.5 text-xs text-gray-500 rounded hover:text-gray-300 transition-colors">1W</button>
+                <button data-period="1M" onclick="setBuilderChartPeriod('1M')" class="px-2 py-0.5 text-xs text-gray-500 rounded hover:text-gray-300 transition-colors">1M</button>
+                <button data-period="3M" onclick="setBuilderChartPeriod('3M')" class="px-2 py-0.5 text-xs text-gray-500 rounded hover:text-gray-300 transition-colors">3M</button>
+                <button data-period="1Y" onclick="setBuilderChartPeriod('1Y')" class="px-2 py-0.5 text-xs text-gray-500 rounded hover:text-gray-300 transition-colors">1Y</button>
+                <button data-period="ALL" onclick="setBuilderChartPeriod('ALL')" class="px-2 py-0.5 text-xs text-blue-400 rounded transition-colors">ALL</button>
+              </div>
+            </div>
+            <div style="height:380px">
+              <canvas id="builder-chart"></canvas>
+            </div>
+          </div>
+
+          <span id="builder-chart-ref-label" class="hidden">BTC Price</span>
+
+          <!-- Backtest Panel -->
+          <div id="backtest-panel" class="bg-gray-900/40 rounded-xl p-4">
+            <div class="flex items-center justify-between mb-3">
+              <h3 class="text-xs font-medium text-gray-400 uppercase tracking-wide">Backtest</h3>
+            </div>
+            <div class="flex items-center gap-4 mb-3">
+              <label class="text-xs text-gray-500">
+                Buy above
+                <input type="number" id="bt-buy" value="60" min="0" max="100" step="5"
+                  onchange="renderBacktestPanel()"
+                  class="w-14 ml-1 px-2 py-1 text-xs bg-gray-800 border border-gray-700 rounded text-gray-300 text-center">
+              </label>
+              <label class="text-xs text-gray-500">
+                Sell below
+                <input type="number" id="bt-sell" value="40" min="0" max="100" step="5"
+                  onchange="renderBacktestPanel()"
+                  class="w-14 ml-1 px-2 py-1 text-xs bg-gray-800 border border-gray-700 rounded text-gray-300 text-center">
+              </label>
+              <button onclick="renderBacktestPanel()" class="px-3 py-1 text-xs bg-gray-800 text-gray-400 rounded hover:text-gray-200 transition-colors">Run</button>
+            </div>
+            <div id="bt-results" class="text-xs text-gray-500">Click Run to simulate</div>
+          </div>
+        </div>
+
+        <!-- Right: Market picker panel -->
+        <div class="space-y-4">
+          <input type="text" id="builder-market-search" placeholder="Search markets..."
+            oninput="onBuilderMarketSearch(this.value)"
+            class="w-full px-3 py-2 text-xs bg-gray-800 border border-gray-700 rounded-lg text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500">
+          <div id="builder-market-picker" class="space-y-3 max-h-[480px] overflow-y-auto pr-1"></div>
+          <div id="builder-signal-sources"></div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- EXPLORE PAGE -->
+    <div id="page-explore" class="page space-y-6"></div>
+
+    <!-- API PAGE -->
+    <div id="page-api" class="page space-y-6">
+      <div class="flex items-center justify-between">
+        <h1 class="text-xl font-light text-gray-300 tracking-wide">API</h1>
+      </div>
+      <div id="api-panel-content"></div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="text-center text-xs text-gray-600 py-6 mt-8">
+      Data from Polymarket public APIs &middot; Scores are informational only, not financial advice.
+    </footer>
+
+  </div>
+
+  <!-- Alert Modal -->
+  <div id="alert-modal" class="hidden fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+    <div class="bg-gray-900 rounded-2xl border border-gray-700 w-full max-w-sm mx-4 p-6 relative">
+      <button onclick="closeAlertModal()" class="absolute top-4 right-4 text-gray-500 hover:text-gray-300 text-xl">&times;</button>
+      <h3 class="text-sm font-medium text-gray-200 mb-1">Set Alert</h3>
+      <p id="alert-indicator-name" class="text-xs text-gray-500 mb-4"></p>
+      <input type="hidden" id="alert-indicator-id">
+
+      <label class="block text-xs text-gray-400 mb-1">Condition</label>
+      <select id="alert-condition" onchange="toggleAlertThreshold()"
+        class="w-full px-3 py-2 text-xs bg-gray-800 border border-gray-700 rounded-lg text-gray-300 mb-3">
+        <option value="crosses_above">Crosses above</option>
+        <option value="crosses_below">Crosses below</option>
+        <option value="daily_summary">Daily summary</option>
+      </select>
+
+      <div id="alert-threshold-wrap">
+        <label class="block text-xs text-gray-400 mb-1">Threshold (0-100)</label>
+        <input type="number" id="alert-threshold" value="60" min="0" max="100" step="5"
+          class="w-full px-3 py-2 text-xs bg-gray-800 border border-gray-700 rounded-lg text-gray-300 mb-3">
+      </div>
+
+      <label class="block text-xs text-gray-400 mb-1">Channel</label>
+      <select id="alert-channel"
+        class="w-full px-3 py-2 text-xs bg-gray-800 border border-gray-700 rounded-lg text-gray-300 mb-3">
+        <option value="email">Email</option>
+        <option value="webhook">Webhook URL</option>
+        <option value="discord">Discord Webhook</option>
+      </select>
+
+      <label class="block text-xs text-gray-400 mb-1">Destination</label>
+      <input type="text" id="alert-destination" placeholder="email@example.com or https://..."
+        class="w-full px-3 py-2 text-xs bg-gray-800 border border-gray-700 rounded-lg text-gray-300 mb-4">
+
+      <div id="alert-error" class="text-red-400 text-xs mb-2"></div>
+      <button onclick="createAlert()" class="w-full px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-500 transition-colors">Create Alert</button>
+    </div>
+  </div>
+
+  <!-- Auth Modal -->
+  <div id="auth-modal" class="hidden fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+    <div class="bg-gray-900 rounded-2xl border border-gray-700 w-full max-w-md mx-4 p-6 relative">
+      <button onclick="closeAuthModal()" class="absolute top-4 right-4 text-gray-500 hover:text-gray-300 text-xl">&times;</button>
+
+      <!-- Wallet Connect -->
+      <button onclick="connectPhantom()" class="w-full flex items-center justify-center gap-3 px-4 py-3 bg-purple-600 text-white rounded-xl hover:bg-purple-500 transition-colors mb-4">
+        <svg width="20" height="20" viewBox="0 0 128 128" fill="white"><path d="M110.6 49.4c-2.1-12.8-10.2-24-22.1-30.5C76.7 12.4 62.4 11.3 49.6 16 36.7 20.7 26.4 30.9 21.5 43.7c-4.8 12.8-3.8 27 2.8 38.9 6.6 11.9 17.8 20.1 30.6 22.4 3.2.6 6.4.9 9.6.9 9.7 0 19.1-3.2 27-9.2 1.4-1.1 1.7-3 .6-4.4s-3-1.7-4.4-.6c-11 8.3-25.2 10.4-38.2 5.7-13-4.7-22.8-15.3-26.4-28.8-3.6-13.5-.5-27.8 8.4-38.5C40.3 19.4 53.3 13.7 67 14.2c13.7.5 26.2 7.2 33.8 18.2 4.3 6.2 6.8 13.4 7.4 20.8H97.9c-4.4 0-8 3.6-8 8v24c0 4.4 3.6 8 8 8h10c4.4 0 8-3.6 8-8V61.2c0-4-2-7.7-5.3-9.8v-2z"/></svg>
+        Connect Phantom Wallet
+      </button>
+
+      <div class="flex items-center gap-3 mb-4">
+        <div class="flex-1 border-t border-gray-700"></div>
+        <span class="text-xs text-gray-500 uppercase">or</span>
+        <div class="flex-1 border-t border-gray-700"></div>
+      </div>
+
+      <!-- Email Tabs -->
+      <div class="flex border-b border-gray-700 mb-4">
+        <button id="auth-tab-login" onclick="switchAuthTab('login')" class="px-4 py-2 text-sm border-b-2 border-blue-500 text-gray-200 transition-colors">Login</button>
+        <button id="auth-tab-register" onclick="switchAuthTab('register')" class="px-4 py-2 text-sm border-b-2 border-transparent text-gray-500 transition-colors">Register</button>
+      </div>
+
+      <div id="auth-error" class="text-red-400 text-sm mb-3"></div>
+
+      <!-- Login Form -->
+      <form id="auth-form-login" onsubmit="handleLoginSubmit(event)">
+        <input id="login-email" type="email" placeholder="Email" required
+          class="w-full px-4 py-2.5 mb-3 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500">
+        <input id="login-password" type="password" placeholder="Password" required
+          class="w-full px-4 py-2.5 mb-4 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500">
+        <button type="submit" class="w-full px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-500 transition-colors">Sign In</button>
+      </form>
+
+      <!-- Register Form -->
+      <form id="auth-form-register" class="hidden" onsubmit="handleRegisterSubmit(event)">
+        <input id="register-name" type="text" placeholder="Display Name"
+          class="w-full px-4 py-2.5 mb-3 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500">
+        <input id="register-email" type="email" placeholder="Email" required
+          class="w-full px-4 py-2.5 mb-3 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500">
+        <input id="register-password" type="password" placeholder="Password (8+ chars)" required minlength="8"
+          class="w-full px-4 py-2.5 mb-4 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500">
+        <button type="submit" class="w-full px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-500 transition-colors">Create Account</button>
+      </form>
+    </div>
+  </div>
+
+  <script src="js/sectors.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/app.js"></script>
+  <script src="js/sandbox.js"></script>
+  <script src="js/explore.js"></script>
+  <script src="js/api-panel.js"></script>
+
+</body>
+</html>

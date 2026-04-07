@@ -1,0 +1,6 @@
+pipeline/
+scripts/
+.github/
+*.py
+__pycache__/
+.env.local

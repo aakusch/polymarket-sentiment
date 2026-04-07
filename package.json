@@ -1,0 +1,12 @@
+{
+  "private": true,
+  "dependencies": {
+    "@neondatabase/serverless": "^0.10",
+    "bcryptjs": "^2.4",
+    "jsonwebtoken": "^9.0",
+    "tweetnacl": "^1.0",
+    "bs58": "^6.0",
+    "@solana/web3.js": "^1.95",
+    "@vercel/og": "^0.6"
+  }
+}
