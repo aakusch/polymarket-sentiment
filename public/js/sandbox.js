@@ -20,39 +20,44 @@ let sparklineCharts = [];
 
 let _indicatorCache = null;
 
-function _mergeWithDemos(userIndicators) {
-  // Always include demo indicators for sectors the user hasn't built their own
-  const ids = new Set(userIndicators.map(i => i.id));
-  const merged = [...userIndicators];
-  for (const demo of DEMO_INDICATORS) {
-    if (!ids.has(demo.id)) merged.push(demo);
-  }
-  return merged;
-}
-
 async function getIndicators() {
+  if (_indicatorCache) return _indicatorCache;
+  const results = [];
+  // Fetch user's own indicators if authenticated
   if (authState.token) {
-    if (_indicatorCache) return _indicatorCache;
     try {
       const res = await fetch('/api/indicators', { headers: authHeaders() });
       if (res.ok) {
         const items = await res.json();
-        if (items.length > 0) {
-          _indicatorCache = _mergeWithDemos(items);
-          return _indicatorCache;
-        }
+        results.push(...items);
       }
-    } catch (e) { console.error('Failed to fetch indicators:', e); }
+    } catch (e) { console.error('Failed to fetch user indicators:', e); }
   }
+  // Also fetch public indicators
+  try {
+    const res = await fetch('/api/indicators/public');
+    if (res.ok) {
+      const data = await res.json();
+      const existingIds = new Set(results.map(i => i.id));
+      for (const ind of (data.indicators || [])) {
+        if (!existingIds.has(ind.id)) results.push(ind);
+      }
+    }
+  } catch (e) { console.error('Failed to fetch public indicators:', e); }
+  // Merge with localStorage
   const local = JSON.parse(localStorage.getItem('pcsi_indicators') || '[]');
-  return _mergeWithDemos(local);
+  const allIds = new Set(results.map(i => i.id));
+  for (const ind of local) {
+    if (!allIds.has(ind.id)) results.push(ind);
+  }
+  if (results.length > 0) _indicatorCache = results;
+  return results;
 }
 
 // Sync version for non-async callers (builder load menu, edit, etc.)
 function getIndicatorsSync() {
   if (_indicatorCache) return _indicatorCache;
-  const local = JSON.parse(localStorage.getItem('pcsi_indicators') || '[]');
-  return _mergeWithDemos(local);
+  return JSON.parse(localStorage.getItem('pcsi_indicators') || '[]');
 }
 
 async function saveIndicatorToStorage(indicator) {
@@ -94,129 +99,6 @@ function generateId() {
   return Math.random().toString(36).substr(2, 8);
 }
 
-// ── Demo Indicators (seed localStorage if empty) ─────────────────────────
-
-const DEMO_INDICATORS = [
-  {
-    id: 'demo_btc_core', name: 'BTC Core Targets', sector: 'crypto', asset: 'BTC',
-    markets: {
-      '701491': 150, '701490': 140, '701489': 120, '701493': 130,
-      '701494': 110, '701495': 100, '701496': 80,
-      '701501': 60, '701502': 50, '701503': 40,
-      '516926': 80, '692258': 70, '824952': 60,
-      '512250': 90, '1144471': 50,
-    },
-    fgEnabled: false, fgWeight: 30, isPublic: true, pricePer100: null,
-    createdAt: '2026-04-03T12:00:00Z',
-  },
-  {
-    id: 'demo_btc_fg', name: 'BTC Contrarian F&G', sector: 'crypto', asset: 'BTC',
-    markets: {
-      '701491': 120, '701490': 100, '701493': 100, '701495': 80,
-      '701496': 60, '701500': 80, '701499': 70,
-      '1057883': 40, '701486': 50, '701488': 60,
-      '516926': 100, '512250': 80,
-    },
-    fgEnabled: true, fgWeight: 55, isPublic: true, pricePer100: null,
-    createdAt: '2026-04-03T12:01:00Z',
-  },
-  {
-    id: 'demo_btc_dip', name: 'BTC Dip Monitor', sector: 'crypto', asset: 'BTC',
-    markets: {
-      '701503': 200, '701504': 180, '701502': 180, '701501': 160,
-      '701500': 140, '701499': 120,
-      '1339768': 100, '1339769': 90, '1343219': 80,
-      '1343220': 60, '1343228': 40, '1057916': 50,
-      '701491': 30, '701486': 20,
-    },
-    fgEnabled: false, fgWeight: 30, isPublic: true, pricePer100: null,
-    createdAt: '2026-04-03T12:02:00Z',
-  },
-  {
-    id: 'demo_eth_price', name: 'ETH Price Composite', sector: 'crypto', asset: 'ETH',
-    markets: {
-      '578092': 120, '251855': 150, '1076131': 100, '1076132': 80,
-      '1076110': 90, '1076108': 70, '1076111': 60,
-      '1473059': 100, '253520': 40, '1168516': 30, '1693675': 50,
-    },
-    fgEnabled: true, fgWeight: 25, isPublic: true, pricePer100: null,
-    createdAt: '2026-04-03T12:03:00Z',
-  },
-  {
-    id: 'demo_btc_ladder', name: 'BTC Milestone Ladder', sector: 'crypto', asset: 'BTC',
-    markets: {
-      '1345529': 100, '1345530': 100, '1345531': 100,
-      '701496': 100, '701495': 100, '701494': 100, '701493': 100,
-      '701492': 100, '701491': 100, '701490': 100, '701489': 100,
-      '701488': 100, '701487': 100, '701486': 100, '1057883': 100,
-    },
-    fgEnabled: false, fgWeight: 30, isPublic: true, pricePer100: null,
-    createdAt: '2026-04-03T12:04:00Z',
-  },
-  // ── Stocks demos ──────────────────────────────────────────
-  {
-    id: 'demo_spx_sentiment', name: 'S&P 500 Sentiment', sector: 'stocks', asset: 'SPX',
-    weights: { price_targets: 100, earnings: 80, corporate: 60 },
-    fgEnabled: false, fgWeight: 30, isPublic: true, pricePer100: null,
-    createdAt: '2026-04-03T12:05:00Z',
-  },
-  {
-    id: 'demo_tech_pulse', name: 'Tech Mega-Cap Pulse', sector: 'stocks', asset: 'NDX',
-    weights: { price_targets: 150, earnings: 150, corporate: 40 },
-    fgEnabled: false, fgWeight: 30, isPublic: true, pricePer100: null,
-    createdAt: '2026-04-03T12:06:00Z',
-  },
-  {
-    id: 'demo_earnings_signal', name: 'Earnings Season Signal', sector: 'stocks', asset: 'SPX',
-    weights: { price_targets: 40, earnings: 200, corporate: 80 },
-    fgEnabled: false, fgWeight: 30, isPublic: true, pricePer100: null,
-    createdAt: '2026-04-03T12:07:00Z',
-  },
-  // ── Economy demos ─────────────────────────────────────────
-  {
-    id: 'demo_fed_outlook', name: 'Fed Policy Outlook', sector: 'economy', asset: 'FED',
-    weights: { monetary_policy: 200, inflation: 80, growth: 40, employment: 40 },
-    fgEnabled: false, fgWeight: 30, isPublic: true, pricePer100: null,
-    createdAt: '2026-04-03T12:08:00Z',
-  },
-  {
-    id: 'demo_recession_watch', name: 'Recession Watch', sector: 'economy', asset: 'GDP',
-    weights: { monetary_policy: 60, inflation: 60, growth: 200, employment: 150 },
-    fgEnabled: false, fgWeight: 30, isPublic: true, pricePer100: null,
-    createdAt: '2026-04-03T12:09:00Z',
-  },
-  {
-    id: 'demo_macro_index', name: 'Macro Sentiment Index', sector: 'economy', asset: 'FED',
-    weights: { monetary_policy: 100, inflation: 100, growth: 100, employment: 100 },
-    fgEnabled: false, fgWeight: 30, isPublic: true, pricePer100: null,
-    createdAt: '2026-04-03T12:10:00Z',
-  },
-  // ── Politics demos ────────────────────────────────────────
-  {
-    id: 'demo_election_barometer', name: 'Election Barometer', sector: 'politics', asset: 'GOP',
-    weights: { favors_incumbent: 150, favors_challenger: 150, legislative: 30, judicial: 20, geopolitical: 20 },
-    fgEnabled: false, fgWeight: 30, isPublic: true, pricePer100: null,
-    createdAt: '2026-04-03T12:11:00Z',
-  },
-  {
-    id: 'demo_policy_impact', name: 'Policy Impact Index', sector: 'politics', asset: 'SENATE',
-    weights: { favors_incumbent: 30, favors_challenger: 30, legislative: 150, judicial: 100, geopolitical: 100 },
-    fgEnabled: false, fgWeight: 30, isPublic: true, pricePer100: null,
-    createdAt: '2026-04-03T12:12:00Z',
-  },
-  {
-    id: 'demo_political_sentiment', name: 'Political Sentiment', sector: 'politics', asset: 'DEM',
-    weights: { favors_incumbent: 100, favors_challenger: 100, legislative: 80, judicial: 60, geopolitical: 60 },
-    fgEnabled: false, fgWeight: 30, isPublic: true, pricePer100: null,
-    createdAt: '2026-04-03T12:13:00Z',
-  },
-];
-
-function seedDemoIndicators() {
-  const existing = JSON.parse(localStorage.getItem('pcsi_indicators') || '[]');
-  if (existing.length > 0) return;
-  localStorage.setItem('pcsi_indicators', JSON.stringify(DEMO_INDICATORS));
-}
 
 // ── Core Computation ─────────────────────────────────────────────────────
 

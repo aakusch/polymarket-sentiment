@@ -8,7 +8,7 @@ module.exports = async function handler(req, res) {
   const auth = await validateApiKey(req, res, { deductCredit: false, endpoint: '/v2/webhooks' });
   if (!auth) return;
 
-  const params = req.query.params || [];
+  const raw = req.query.params ?? req.query["[...params]"]; const params = Array.isArray(raw) ? raw : raw ? [raw] : [];
   const webhookId = params[0];
   const sql = auth.sql;
 

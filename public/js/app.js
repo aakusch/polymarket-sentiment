@@ -118,15 +118,21 @@ function migrateIndicators() {
   if (!raw) return;
   try {
     const indicators = JSON.parse(raw);
+    // Remove demo indicators from localStorage
+    const filtered = indicators.filter(ind => !ind.id?.startsWith('demo'));
+    if (filtered.length !== indicators.length) {
+      localStorage.setItem('pcsi_indicators', JSON.stringify(filtered));
+    }
+    // Add default sector if missing
     let changed = false;
-    for (const ind of indicators) {
+    for (const ind of filtered) {
       if (!ind.sector) {
         ind.sector = 'crypto';
         changed = true;
       }
     }
     if (changed) {
-      localStorage.setItem('pcsi_indicators', JSON.stringify(indicators));
+      localStorage.setItem('pcsi_indicators', JSON.stringify(filtered));
     }
   } catch (_) {}
 }
@@ -281,7 +287,6 @@ async function triggerSync() {
 function init() {
   initAuth();
   migrateIndicators();
-  seedDemoIndicators();
   handleRoute();
   // Show freshness badge once crypto data loads
   loadSectorData('crypto').then(updateFreshnessBadge);

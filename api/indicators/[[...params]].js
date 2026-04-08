@@ -3,7 +3,8 @@ const { authenticate } = require('../_lib/auth');
 const { computeIndicator } = require('../_lib/compute');
 
 module.exports = async function handler(req, res) {
-  const params = req.query.params || [];
+  const raw = req.query.params ?? req.query['[...params]'];
+  const params = Array.isArray(raw) ? raw : raw ? [raw] : [];
 
   // GET/POST /api/indicators — index
   if (params.length === 0) return handleIndex(req, res);
@@ -133,8 +134,19 @@ async function handlePublic(req, res) {
       rows = await sql`SELECT i.id, i.name, i.sector, i.asset, i.is_public, i.latest_score, i.markets, i.weights, i.fg_enabled, i.fg_weight, i.created_at, u.display_name as creator_name FROM indicators i JOIN users u ON i.user_id = u.id WHERE i.is_public = true ORDER BY ${orderBy} LIMIT ${limit} OFFSET ${offset}`;
     }
     const indicators = rows.map(r => {
-      const markets = r.markets || r.weights?.markets || {};
-      return { id: r.id, name: r.name, sector: r.sector || 'crypto', asset: r.asset || 'BTC', score: r.latest_score != null ? parseFloat(r.latest_score) : null, label: scoreLabel(r.latest_score), creator: r.creator_name || 'Anonymous', marketCount: typeof markets === 'object' ? Object.keys(markets).length : 0, fgEnabled: r.fg_enabled || false, createdAt: r.created_at };
+      const w = r.weights || {};
+      const markets = w.markets || r.markets || {};
+      return {
+        id: r.id, name: r.name, sector: r.sector || 'crypto', asset: r.asset || 'BTC',
+        ...(w.markets ? { markets: w.markets } : { weights: w }),
+        referenceAsset: w.referenceAsset || null,
+        score: r.latest_score != null ? parseFloat(r.latest_score) : null,
+        label: scoreLabel(r.latest_score),
+        creator: r.creator_name || 'Anonymous',
+        marketCount: typeof markets === 'object' ? Object.keys(markets).length : 0,
+        fgEnabled: r.fg_enabled || false, fgWeight: r.fg_weight || 30,
+        createdAt: r.created_at,
+      };
     });
     res.setHeader('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=600');
     res.json({ indicators, count: indicators.length, offset, limit });

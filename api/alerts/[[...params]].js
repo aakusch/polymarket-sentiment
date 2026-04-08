@@ -5,7 +5,7 @@ module.exports = async function handler(req, res) {
   const auth = authenticate(req);
   if (!auth) return res.status(401).json({ error: 'Unauthorized' });
 
-  const params = req.query.params || [];
+  const raw = req.query.params ?? req.query["[...params]"]; const params = Array.isArray(raw) ? raw : raw ? [raw] : [];
   const alertId = params[0];
   const sql = getDb();
 
