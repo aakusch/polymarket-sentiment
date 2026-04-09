@@ -12,10 +12,13 @@ module.exports = async function handler(req, res) {
   if (params[0] === 'public') return handlePublic(req, res);
   // POST /api/indicators/migrate
   if (params[0] === 'migrate') return handleMigrate(req, res);
-  // GET /api/indicators/:id/page — HTML page
+  // GET /api/indicators/:id/page — HTML page (also via ?action=page rewrite)
   if (params.length === 2 && params[1] === 'page') return handlePage(req, res, params[0]);
   // GET/PUT/DELETE /api/indicators/:id
-  if (params.length === 1) return handleById(req, res, params[0]);
+  if (params.length === 1) {
+    if (req.query.action === 'page') return handlePage(req, res, params[0]);
+    return handleById(req, res, params[0]);
+  }
 
   return res.status(404).json({ error: 'Not found' });
 };
@@ -201,8 +204,13 @@ async function handlePage(req, res, id) {
   const safeCreator = esc(indicator.creator_name || 'Anonymous');
   const safeAsset = esc(config.asset);
   const priceInfo = indicator.price_per_100 ? `${parseFloat(indicator.price_per_100)} ${indicator.price_token || 'SOL'} per 100 calls` : 'Free';
-  const weightEntries = Object.entries(config.weights).filter(([k, v]) => v > 0 && k !== 'other').map(([k, v]) => `<div class="flex justify-between"><span class="text-gray-400 capitalize">${k.replace('_', ' ')}</span><span class="text-gray-200">${v}%</span></div>`);
-  const breakdownEntries = Object.entries(breakdown).map(([k, v]) => `<div class="flex justify-between"><span class="text-gray-400 capitalize">${k.replace('_', ' ')}</span><span class="text-gray-200">${v.toFixed(1)}</span></div>`);
+  const isMarketMode = !!config.markets;
+  const weightEntries = isMarketMode
+    ? [`<div class="text-sm text-gray-400">${config.marketCount} markets selected</div>`]
+    : Object.entries(config.weights || {}).filter(([k, v]) => v > 0 && k !== 'other').map(([k, v]) => `<div class="flex justify-between"><span class="text-gray-400 capitalize">${k.replace('_', ' ')}</span><span class="text-gray-200">${v}%</span></div>`);
+  const breakdownEntries = Object.keys(breakdown).length > 0
+    ? Object.entries(breakdown).map(([k, v]) => `<div class="flex justify-between"><span class="text-gray-400 capitalize">${k.replace('_', ' ')}</span><span class="text-gray-200">${v.toFixed(1)}</span></div>`)
+    : [`<div class="text-sm text-gray-400">Per-market mode</div>`];
   const maxPts = 200, step = Math.max(1, Math.floor(dates.length / maxPts));
   const chartDates = [], chartScores = [], chartPrices = [];
   for (let i = 0; i < dates.length; i += step) { chartDates.push(dates[i]); chartScores.push(scores[i]); chartPrices.push(prices[i]); }

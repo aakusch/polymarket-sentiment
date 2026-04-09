@@ -205,11 +205,19 @@ def export_sandbox(db: Database, sector: str = "crypto") -> dict:
     # For non-crypto sectors, allow asset='OTHER' since many markets won't match
     # specific asset patterns (e.g. politics markets have no financial asset)
     sector_filter = f"AND sector = {ph}" if sector != "crypto" else ""
+    # Exclude crypto tickers from non-crypto sectors (historical misclassification)
+    _CRYPTO_TICKERS = ('BTC','ETH','SOL','XRP','ADA','DOGE','AVAX','DOT','LINK','MATIC','UNI','LTC','ATOM','NEAR','SUI')
+    crypto_exclude = ""
+    if sector != "crypto":
+        placeholders = ",".join([ph] * len(_CRYPTO_TICKERS))
+        crypto_exclude = f"AND asset NOT IN ({placeholders})"
     if sector == "crypto":
         base_filter = f"WHERE asset != 'OTHER' {sector_filter}"
     else:
-        base_filter = f"WHERE 1=1 {sector_filter}"
+        base_filter = f"WHERE 1=1 {sector_filter} {crypto_exclude}"
     params = [sector] if sector != "crypto" else []
+    if sector != "crypto":
+        params.extend(_CRYPTO_TICKERS)
 
     rows = db._select(f"""
         SELECT date, asset,

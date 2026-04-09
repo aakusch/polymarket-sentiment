@@ -16,24 +16,28 @@ def extract_asset(question: str, sector: str = "crypto") -> str:
     """Extract the primary asset from a market question. Returns ticker or 'OTHER'.
 
     For non-crypto sectors, also checks STOCK_ASSET_PATTERNS and falls back to
-    a sector default instead of 'OTHER'.
+    a sector default instead of 'OTHER'. Crypto tickers (BTC, ETH, etc.) are
+    remapped to the sector default when sector is not crypto, preventing
+    crypto-market leakage into other sectors.
     """
+    _SECTOR_DEFAULT_ASSET = {
+        "stocks": "MARKET",
+        "economy": "MACRO",
+        "politics": "GOV",
+    }
     q_lower = question.lower()
     # Always check crypto patterns
     for ticker, pattern in ASSET_PATTERNS.items():
         if re.search(pattern, q_lower):
+            # If non-crypto sector matched a crypto ticker, remap to sector default
+            if sector != "crypto":
+                return _SECTOR_DEFAULT_ASSET.get(sector, "OTHER")
             return ticker
     # For non-crypto sectors, also check stock/macro patterns
     if sector != "crypto":
         for ticker, pattern in STOCK_ASSET_PATTERNS.items():
             if re.search(pattern, q_lower):
                 return ticker
-    # Sector-specific default for unmatched markets
-    _SECTOR_DEFAULT_ASSET = {
-        "stocks": "MARKET",
-        "economy": "MACRO",
-        "politics": "GOV",
-    }
     return _SECTOR_DEFAULT_ASSET.get(sector, "OTHER")
 
 

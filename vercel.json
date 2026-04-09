@@ -3,7 +3,12 @@
   "outputDirectory": "public",
   "rewrites": [
     { "source": "/i/:id", "destination": "/api/indicators/:id/page" },
-    { "source": "/embed/:id", "destination": "/api/embed/:id" }
+    { "source": "/embed/:id", "destination": "/api/embed/:id" },
+    { "source": "/api/indicators/:id/page", "destination": "/api/indicators/:id?action=page" },
+    { "source": "/api/keys", "destination": "/api/keys/__root" },
+    { "source": "/api/alerts", "destination": "/api/alerts/__root" },
+    { "source": "/api/v2/indicators", "destination": "/api/v2/indicators/__root" },
+    { "source": "/api/v2/webhooks", "destination": "/api/v2/webhooks/__root" }
   ],
   "headers": [
     {

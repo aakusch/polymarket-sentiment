@@ -1660,8 +1660,10 @@ async function renderComparisonChart() {
 // BACKTEST PANEL
 // ═════════════════════════════════════════════════════════════════════════════
 
-function computeBacktest(scores, prices, entryThreshold, exitThreshold, strategy) {
+function computeBacktest(dates, scores, prices, entryThreshold, exitThreshold, strategy, options = {}) {
   if (!scores || !prices || scores.length < 2) return null;
+  const { costBps = 0 } = options;
+  const halfCost = costBps / 20000; // half of round-trip bps as decimal
 
   // Find first index with both score and price for baseline
   const firstValidIdx = scores.findIndex((s, i) => s != null && prices[i] != null);
@@ -1686,10 +1688,14 @@ function computeBacktest(scores, prices, entryThreshold, exitThreshold, strategy
   let maxDrawdown = 0;
   let trades = 0;
   let wins = 0;
+  let daysInPosition = 0;
   const equityCurve = [];
   const bhCurve = [];
   const dailyReturns = [];
+  const tradeLog = [];
+  let currentTrade = null;
   let prevEquity = 1;
+  let totalDays = 0;
 
   for (let i = 0; i < scores.length; i++) {
     if (scores[i] == null || prices[i] == null) {
@@ -1697,30 +1703,45 @@ function computeBacktest(scores, prices, entryThreshold, exitThreshold, strategy
       bhCurve.push(bhCurve.length > 0 ? bhCurve[bhCurve.length - 1] : 1);
       continue;
     }
+    totalDays++;
 
     // Update equity if in position (mark-to-market)
     if (position && entryPrice > 0) {
       const prevClose = i > 0 && prices[i - 1] != null ? prices[i - 1] : entryPrice;
       const dayPnl = (prices[i] - prevClose) / prevClose;
       equity *= (1 + dayPnl);
+      daysInPosition++;
     }
 
     // Trading logic
     if (!position && shouldEnter(scores[i])) {
       position = true;
       entryPrice = prices[i];
+      equity *= (1 - halfCost); // entry cost
       trades++;
+      currentTrade = { entryIdx: i, entryDate: dates[i], entryPrice: prices[i], entryScore: scores[i] };
     } else if (position && shouldExit(scores[i])) {
+      equity *= (1 - halfCost); // exit cost
       const pnl = (prices[i] - entryPrice) / entryPrice;
       if (pnl > 0) wins++;
       position = false;
+      if (currentTrade) {
+        currentTrade.exitIdx = i;
+        currentTrade.exitDate = dates[i];
+        currentTrade.exitPrice = prices[i];
+        currentTrade.exitScore = scores[i];
+        currentTrade.pnl = pnl;
+        currentTrade.duration = i - currentTrade.entryIdx;
+        tradeLog.push(currentTrade);
+        currentTrade = null;
+      }
     }
 
     if (equity > maxEquity) maxEquity = equity;
     const dd = (maxEquity - equity) / maxEquity;
     if (dd > maxDrawdown) maxDrawdown = dd;
 
-    // Track daily return for Sharpe
+    // Track daily return for Sharpe/Sortino
     if (prevEquity > 0) dailyReturns.push(equity / prevEquity - 1);
     prevEquity = equity;
 
@@ -1728,17 +1749,60 @@ function computeBacktest(scores, prices, entryThreshold, exitThreshold, strategy
     bhCurve.push(prices[i] / basePrice);
   }
 
+  // Close open trade for logging (still in position at end)
+  if (position && currentTrade) {
+    const lastIdx = scores.length - 1;
+    currentTrade.exitIdx = lastIdx;
+    currentTrade.exitDate = dates[lastIdx];
+    currentTrade.exitPrice = prices[lastIdx];
+    currentTrade.exitScore = scores[lastIdx];
+    currentTrade.pnl = (prices[lastIdx] - currentTrade.entryPrice) / currentTrade.entryPrice;
+    currentTrade.duration = lastIdx - currentTrade.entryIdx;
+    currentTrade.open = true;
+    tradeLog.push(currentTrade);
+  }
+
   const totalReturn = equity - 1;
   const lastBh = bhCurve.length > 0 ? bhCurve[bhCurve.length - 1] - 1 : 0;
 
   // Annualized Sharpe (sqrt(252) * mean/stdev of daily returns)
   let sharpe = null;
+  let sortino = null;
   if (dailyReturns.length > 10) {
     const mean = dailyReturns.reduce((a, b) => a + b, 0) / dailyReturns.length;
     const variance = dailyReturns.reduce((a, r) => a + (r - mean) ** 2, 0) / dailyReturns.length;
     const stdev = Math.sqrt(variance);
     if (stdev > 0) sharpe = (mean / stdev) * Math.sqrt(252);
+
+    // Sortino: only downside deviation
+    const downReturns = dailyReturns.filter(r => r < 0);
+    if (downReturns.length > 0) {
+      const downVar = downReturns.reduce((a, r) => a + r * r, 0) / dailyReturns.length;
+      const downDev = Math.sqrt(downVar);
+      if (downDev > 0) sortino = (mean / downDev) * Math.sqrt(252);
+    }
   }
+
+  // CAGR
+  let cagr = null;
+  if (totalDays > 0) {
+    cagr = (Math.pow(equity, 252 / totalDays) - 1) * 100;
+  }
+
+  // Profit factor
+  let profitFactor = null;
+  const grossProfit = tradeLog.filter(t => t.pnl > 0).reduce((s, t) => s + t.pnl, 0);
+  const grossLoss = Math.abs(tradeLog.filter(t => t.pnl < 0).reduce((s, t) => s + t.pnl, 0));
+  if (grossLoss > 0) profitFactor = grossProfit / grossLoss;
+
+  // Avg trade PnL
+  const avgTrade = tradeLog.length > 0 ? (tradeLog.reduce((s, t) => s + t.pnl, 0) / tradeLog.length) * 100 : 0;
+
+  // Avg duration
+  const avgDuration = tradeLog.length > 0 ? tradeLog.reduce((s, t) => s + t.duration, 0) / tradeLog.length : 0;
+
+  // Exposure
+  const exposure = totalDays > 0 ? (daysInPosition / totalDays) * 100 : 0;
 
   return {
     totalReturn: totalReturn * 100,
@@ -1748,15 +1812,28 @@ function computeBacktest(scores, prices, entryThreshold, exitThreshold, strategy
     buyHold: lastBh * 100,
     alpha: (totalReturn - lastBh) * 100,
     sharpe,
+    sortino,
+    cagr,
+    profitFactor,
+    avgTrade,
+    avgDuration,
+    exposure,
     equityCurve,
     bhCurve,
+    tradeLog,
   };
 }
 
 // Backtest slider/input sync helpers
+let _btDebounce = null;
 function syncBtInput(which, val) {
   const numEl = document.getElementById(`bt-${which}`);
   if (numEl) numEl.value = val;
+}
+function onBtSliderInput(which, val) {
+  syncBtInput(which, val);
+  clearTimeout(_btDebounce);
+  _btDebounce = setTimeout(() => renderBacktestPanel(), 250);
 }
 function syncBtSlider(which, val) {
   const sliderEl = document.getElementById(`bt-${which}-slider`);
@@ -1806,7 +1883,8 @@ function renderBacktestPanel() {
   const entryThreshold = parseInt(document.getElementById('bt-buy')?.value || '60');
   const exitThreshold = parseInt(document.getElementById('bt-sell')?.value || '40');
 
-  const result = computeBacktest(ts.scores, ts.prices, entryThreshold, exitThreshold, btStrategy);
+  const costBps = parseInt(document.getElementById('bt-cost-bps')?.value || '0');
+  const result = computeBacktest(ts.dates, ts.scores, ts.prices, entryThreshold, exitThreshold, btStrategy, { costBps });
   if (!result) {
     resultsEl.innerHTML = '<span class="text-gray-500 text-xs">Insufficient data — need scores and a reference asset</span>';
     if (equityWrap) equityWrap.classList.add('hidden');
@@ -1816,17 +1894,36 @@ function renderBacktestPanel() {
   const retColor = result.totalReturn >= 0 ? 'text-green-400' : 'text-red-400';
   const alphaColor = result.alpha >= 0 ? 'text-green-400' : 'text-red-400';
   const sharpeStr = result.sharpe != null ? result.sharpe.toFixed(2) : '--';
+  const sortinoStr = result.sortino != null ? result.sortino.toFixed(2) : '--';
+  const cagrStr = result.cagr != null ? `${result.cagr >= 0 ? '+' : ''}${result.cagr.toFixed(1)}%` : '--';
+  const cagrColor = result.cagr != null && result.cagr >= 0 ? 'text-green-400' : (result.cagr != null ? 'text-red-400' : 'text-gray-200');
+  const pfStr = result.profitFactor != null ? result.profitFactor.toFixed(2) : '--';
+  const avgTradeStr = `${result.avgTrade >= 0 ? '+' : ''}${result.avgTrade.toFixed(1)}%`;
+  const avgTradeColor = result.avgTrade >= 0 ? 'text-green-400' : 'text-red-400';
+
+  const m = (label, value, color = 'text-gray-200') =>
+    `<div><div class="text-[10px] text-gray-500 uppercase tracking-wide">${label}</div><div class="${color} text-sm font-semibold tabular-nums">${value}</div></div>`;
 
   resultsEl.innerHTML = `
-    <div class="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-x-5 gap-y-2">
-      <div><div class="text-[10px] text-gray-500 uppercase tracking-wide">Return</div><div class="${retColor} text-sm font-semibold tabular-nums">${result.totalReturn >= 0 ? '+' : ''}${result.totalReturn.toFixed(1)}%</div></div>
-      <div><div class="text-[10px] text-gray-500 uppercase tracking-wide">Buy & Hold</div><div class="text-gray-300 text-sm font-semibold tabular-nums">${result.buyHold >= 0 ? '+' : ''}${result.buyHold.toFixed(1)}%</div></div>
-      <div><div class="text-[10px] text-gray-500 uppercase tracking-wide">Alpha</div><div class="${alphaColor} text-sm font-semibold tabular-nums">${result.alpha >= 0 ? '+' : ''}${result.alpha.toFixed(1)}%</div></div>
-      <div><div class="text-[10px] text-gray-500 uppercase tracking-wide">Max DD</div><div class="text-red-400 text-sm font-semibold tabular-nums">&minus;${result.maxDrawdown.toFixed(1)}%</div></div>
-      <div><div class="text-[10px] text-gray-500 uppercase tracking-wide">Trades</div><div class="text-gray-200 text-sm font-semibold tabular-nums">${result.trades}</div></div>
-      <div><div class="text-[10px] text-gray-500 uppercase tracking-wide">Win Rate</div><div class="text-gray-200 text-sm font-semibold tabular-nums">${result.winRate.toFixed(0)}%</div></div>
-      <div><div class="text-[10px] text-gray-500 uppercase tracking-wide">Sharpe</div><div class="text-gray-200 text-sm font-semibold tabular-nums">${sharpeStr}</div></div>
+    <div class="grid grid-cols-3 sm:grid-cols-5 gap-x-5 gap-y-2 mb-2">
+      ${m('Return', `${result.totalReturn >= 0 ? '+' : ''}${result.totalReturn.toFixed(1)}%`, retColor)}
+      ${m('Buy & Hold', `${result.buyHold >= 0 ? '+' : ''}${result.buyHold.toFixed(1)}%`, 'text-gray-300')}
+      ${m('Alpha', `${result.alpha >= 0 ? '+' : ''}${result.alpha.toFixed(1)}%`, alphaColor)}
+      ${m('Sharpe', sharpeStr)}
+      ${m('Sortino', sortinoStr)}
+    </div>
+    <div class="grid grid-cols-4 sm:grid-cols-7 gap-x-5 gap-y-2">
+      ${m('CAGR', cagrStr, cagrColor)}
+      ${m('Max DD', `\u2212${result.maxDrawdown.toFixed(1)}%`, 'text-red-400')}
+      ${m('Win Rate', `${result.winRate.toFixed(0)}%`)}
+      ${m('Profit Factor', pfStr)}
+      ${m('Trades', result.trades)}
+      ${m('Exposure', `${result.exposure.toFixed(0)}%`)}
+      ${m('Avg Trade', avgTradeStr, avgTradeColor)}
     </div>`;
+
+  // Render trade log
+  renderTradeLog(result.tradeLog);
 
   // Equity curve
   if (equityWrap && result.equityCurve && result.equityCurve.length > 1) {
@@ -1835,6 +1932,65 @@ function renderBacktestPanel() {
   } else if (equityWrap) {
     equityWrap.classList.add('hidden');
   }
+}
+
+function renderTradeLog(tradeLog) {
+  const container = document.getElementById('bt-trade-log');
+  if (!container) return;
+  if (!tradeLog || tradeLog.length === 0) {
+    container.classList.add('hidden');
+    return;
+  }
+  // Keep visibility state from toggle button
+  const totalPnl = tradeLog.reduce((s, t) => s + t.pnl, 0);
+  const avgPnl = (totalPnl / tradeLog.length) * 100;
+  const avgDur = tradeLog.reduce((s, t) => s + t.duration, 0) / tradeLog.length;
+  const fmtDate = d => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '--';
+  const fmtPnl = v => `${v >= 0 ? '+' : ''}${(v * 100).toFixed(1)}%`;
+  const pnlColor = v => v >= 0 ? 'text-green-400' : 'text-red-400';
+  const rowBg = v => v >= 0 ? 'bg-green-500/5' : 'bg-red-500/5';
+
+  const rows = tradeLog.slice(0, 50).map((t, idx) => `
+    <tr class="${rowBg(t.pnl)}">
+      <td class="px-2 py-1 text-gray-500">${idx + 1}</td>
+      <td class="px-2 py-1">${fmtDate(t.entryDate)}</td>
+      <td class="px-2 py-1">${fmtDate(t.exitDate)}${t.open ? ' *' : ''}</td>
+      <td class="px-2 py-1 tabular-nums">$${t.entryPrice?.toFixed(2)}</td>
+      <td class="px-2 py-1 tabular-nums">$${t.exitPrice?.toFixed(2)}</td>
+      <td class="px-2 py-1 tabular-nums ${pnlColor(t.pnl)}">${fmtPnl(t.pnl)}</td>
+      <td class="px-2 py-1 tabular-nums">${t.duration}d</td>
+      <td class="px-2 py-1 tabular-nums text-gray-500">${t.entryScore?.toFixed(0)}\u2192${t.exitScore?.toFixed(0)}</td>
+    </tr>`).join('');
+
+  container.innerHTML = `
+    <table class="w-full text-[11px] text-gray-300 border-collapse">
+      <thead><tr class="text-[10px] text-gray-500 uppercase tracking-wide border-b border-gray-800/40">
+        <th class="px-2 py-1.5 text-left">#</th>
+        <th class="px-2 py-1.5 text-left">Entry</th>
+        <th class="px-2 py-1.5 text-left">Exit</th>
+        <th class="px-2 py-1.5 text-left">Entry $</th>
+        <th class="px-2 py-1.5 text-left">Exit $</th>
+        <th class="px-2 py-1.5 text-left">PnL</th>
+        <th class="px-2 py-1.5 text-left">Dur</th>
+        <th class="px-2 py-1.5 text-left">Score</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+      <tfoot><tr class="border-t border-gray-800/40 text-gray-400 font-medium">
+        <td class="px-2 py-1.5" colspan="4">${tradeLog.length} trades</td>
+        <td class="px-2 py-1.5"></td>
+        <td class="px-2 py-1.5 tabular-nums ${pnlColor(avgPnl / 100)}">${avgPnl >= 0 ? '+' : ''}${avgPnl.toFixed(1)}%</td>
+        <td class="px-2 py-1.5 tabular-nums">${avgDur.toFixed(0)}d</td>
+        <td></td>
+      </tr></tfoot>
+    </table>`;
+}
+
+function toggleTradeLog() {
+  const el = document.getElementById('bt-trade-log');
+  const btn = document.getElementById('bt-trade-toggle');
+  if (!el) return;
+  el.classList.toggle('hidden');
+  if (btn) btn.textContent = el.classList.contains('hidden') ? 'Show Trades' : 'Hide Trades';
 }
 
 function _renderEquityCurve(equity, bh, dates) {
