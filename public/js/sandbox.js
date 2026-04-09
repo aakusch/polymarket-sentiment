@@ -29,7 +29,7 @@ async function getIndicators() {
       const res = await fetch('/api/indicators', { headers: authHeaders() });
       if (res.ok) {
         const items = await res.json();
-        results.push(...items);
+        results.push(...items.map(i => ({ ...i, _isOwned: true })));
       }
     } catch (e) { console.error('Failed to fetch user indicators:', e); }
   }
@@ -40,7 +40,7 @@ async function getIndicators() {
       const data = await res.json();
       const existingIds = new Set(results.map(i => i.id));
       for (const ind of (data.indicators || [])) {
-        if (!existingIds.has(ind.id)) results.push(ind);
+        if (!existingIds.has(ind.id)) results.push({ ...ind, _isOwned: false });
       }
     }
   } catch (e) { console.error('Failed to fetch public indicators:', e); }
@@ -48,7 +48,7 @@ async function getIndicators() {
   const local = JSON.parse(localStorage.getItem('pcsi_indicators') || '[]');
   const allIds = new Set(results.map(i => i.id));
   for (const ind of local) {
-    if (!allIds.has(ind.id)) results.push(ind);
+    if (!allIds.has(ind.id)) results.push({ ...ind, _isOwned: true });
   }
   if (results.length > 0) _indicatorCache = results;
   return results;
@@ -334,6 +334,48 @@ function computeCorrelation(xs, ys) {
   return den > 0 ? num / den : 0;
 }
 
+function computePredictiveScore(scores, prices) {
+  const lags = [1, 2, 3, 5, 7, 14, 21, 30];
+  let peakR = 0, peakLag = 0;
+
+  for (const lag of lags) {
+    const pairs = [];
+    for (let i = 0; i < scores.length - lag; i++) {
+      if (scores[i] != null && prices[i + lag] != null) {
+        pairs.push([scores[i], prices[i + lag]]);
+      }
+    }
+    if (pairs.length < 10) continue;
+
+    const n = pairs.length;
+    const mx = pairs.reduce((s, p) => s + p[0], 0) / n;
+    const my = pairs.reduce((s, p) => s + p[1], 0) / n;
+    let num = 0, dx2 = 0, dy2 = 0;
+    for (const [x, y] of pairs) {
+      const dx = x - mx, dy = y - my;
+      num += dx * dy;
+      dx2 += dx * dx;
+      dy2 += dy * dy;
+    }
+    const den = Math.sqrt(dx2 * dy2);
+    const r = den > 0 ? num / den : 0;
+
+    if (Math.abs(r) > Math.abs(peakR)) {
+      peakR = r;
+      peakLag = lag;
+    }
+  }
+
+  if (peakLag === 0 && peakR === 0) return null;
+
+  const score = Math.round(Math.abs(peakR) * 100 * 0.7 + (1 - peakLag / 30) * 100 * 0.3);
+  return {
+    score: Math.max(0, Math.min(100, score)),
+    peakCorrelation: Math.round(peakR * 1000) / 1000,
+    optimalLag: peakLag,
+  };
+}
+
 function computeDirectionalAccuracy(scores, prices) {
   let correct = 0, total = 0;
   for (let i = 0; i < scores.length - 1; i++) {
@@ -436,12 +478,10 @@ function renderSparkline(canvas, indicatorScores, priceScores) {
 let indicatorViewMode = 'table'; // 'table' | 'card'
 function setIndicatorView(mode) {
   indicatorViewMode = mode;
-  document.getElementById('ind-view-table')?.classList.toggle('bg-gray-800', mode === 'table');
-  document.getElementById('ind-view-table')?.classList.toggle('text-gray-200', mode === 'table');
-  document.getElementById('ind-view-table')?.classList.toggle('text-gray-500', mode !== 'table');
-  document.getElementById('ind-view-card')?.classList.toggle('bg-gray-800', mode === 'card');
-  document.getElementById('ind-view-card')?.classList.toggle('text-gray-200', mode === 'card');
-  document.getElementById('ind-view-card')?.classList.toggle('text-gray-500', mode !== 'card');
+  const tBtn = document.getElementById('ind-view-table');
+  const cBtn = document.getElementById('ind-view-card');
+  tBtn?.classList.toggle('active', mode === 'table');
+  cBtn?.classList.toggle('active', mode === 'card');
   renderIndicatorsPage();
 }
 
@@ -469,11 +509,12 @@ async function renderIndicatorsPage() {
       const ts = computeIndicatorTimeseries(ind, sectorData);
       const corr = computeCorrelation(ts.scores, ts.prices);
       const dirAcc = computeDirectionalAccuracy(ts.scores, ts.prices);
+      const predictive = computePredictiveScore(ts.scores, ts.prices);
       const deltas = computePeriodDeltas(ts.scores, ts.dates);
       const lastScore = [...ts.scores].reverse().find(s => s != null);
-      return { ind, ts, corr, dirAcc, deltas, lastScore };
+      return { ind, ts, corr, dirAcc, predictive, deltas, lastScore };
     }
-    return { ind, ts: { dates: [], scores: [], prices: [] }, corr: null, dirAcc: null, deltas: {}, lastScore: null };
+    return { ind, ts: { dates: [], scores: [], prices: [] }, corr: null, dirAcc: null, predictive: null, deltas: {}, lastScore: null };
   });
 
   // Sort
@@ -487,6 +528,11 @@ async function renderIndicatorsPage() {
         const cb = b.corr != null ? Math.abs(b.corr) : -1;
         return cb - ca;
       }
+      case 'predictive': {
+        const pa = a.predictive?.score ?? -1;
+        const pb = b.predictive?.score ?? -1;
+        return pb - pa;
+      }
       case 'newest':
         return (b.ind.createdAt || '').localeCompare(a.ind.createdAt || '');
       case 'name':
@@ -496,12 +542,22 @@ async function renderIndicatorsPage() {
     }
   });
 
+  // Update count
+  const countEl = document.getElementById('ind-count');
+  if (countEl) countEl.textContent = ranked.length > 0 ? `${ranked.length} indicator${ranked.length !== 1 ? 's' : ''}` : '';
+
   if (ranked.length === 0) {
     container.innerHTML = `
-      <div class="bg-gray-900/50 rounded-2xl p-8 border border-gray-800/50 text-center">
-        <div class="text-gray-400 mb-2">No indicators yet</div>
-        <p class="text-gray-500 text-sm mb-4">Build your first indicator to get started.</p>
-        <a href="#builder" class="inline-block px-5 py-2.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-500 transition-colors">Build &rarr;</a>
+      <div class="bg-gray-800/30 rounded-2xl p-12 border border-gray-700/30 border-dashed text-center">
+        <div class="w-12 h-12 mx-auto mb-4 rounded-full bg-gray-800/60 flex items-center justify-center">
+          <svg class="w-6 h-6 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+        </div>
+        <div class="text-gray-300 font-medium mb-1">No indicators yet</div>
+        <p class="text-gray-500 text-sm mb-5">Create your first sentiment indicator to start tracking markets.</p>
+        <a href="#builder" class="inline-flex items-center gap-1.5 px-5 py-2.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-500 active:scale-[0.97] transition-all shadow-lg shadow-blue-600/20">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+          Build Indicator
+        </a>
       </div>`;
     return;
   }
@@ -557,111 +613,176 @@ function fmtDelta(d) {
   return `<span style="color:${color}">${sign}${d.toFixed(1)}</span>`;
 }
 
+function scoreRingSvg(score, color, size = 44) {
+  const fontSize = size <= 44 ? 13 : Math.round(size * 0.28);
+  const stroke = size <= 44 ? 3 : 4;
+  if (score == null) return `<div class="score-ring" style="width:${size}px;height:${size}px"><div class="score-ring-text"><span style="font-size:${fontSize}px" class="text-gray-600 tabular-nums">--</span></div></div>`;
+  const r = (size - stroke * 2) / 2;
+  const circ = 2 * Math.PI * r;
+  const pct = Math.max(0, Math.min(100, score)) / 100;
+  return `
+    <div class="score-ring" style="width:${size}px;height:${size}px">
+      <svg width="${size}" height="${size}">
+        <circle cx="${size/2}" cy="${size/2}" r="${r}" fill="none" stroke="rgba(255,255,255,0.04)" stroke-width="${stroke}"/>
+        <circle cx="${size/2}" cy="${size/2}" r="${r}" fill="none" stroke="${color}" stroke-width="${stroke}"
+          stroke-dasharray="${circ}" stroke-dashoffset="${circ * (1 - pct)}" stroke-linecap="round"
+          style="transition:stroke-dashoffset 0.6s ease"/>
+      </svg>
+      <div class="score-ring-text"><span style="font-size:${fontSize}px;color:${color}" class="font-bold tabular-nums">${score.toFixed(1)}</span></div>
+    </div>`;
+}
+
 function renderIndicatorTableUnified(ranked) {
+  const svgAlert = '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>';
+  const svgEdit = '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>';
+  const svgTrash = '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>';
+  const svgFork = '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 4h10v10H4zM10 10h10v10H10z"/></svg>';
+
   let html = `
-    <div class="bg-gray-900/50 rounded-xl border border-gray-800/50 overflow-hidden">
+    <div class="bg-gray-800/30 rounded-2xl border border-gray-700/30 overflow-hidden">
       <table class="ind-table text-xs">
         <thead>
-          <tr class="border-b border-gray-800/50 text-gray-500 font-medium">
-            <th class="py-2.5 px-2 pl-4 w-7"></th>
-            <th class="py-2.5 px-2 w-20">Chart</th>
-            <th class="py-2.5 px-2">Indicator</th>
-            <th class="py-2.5 px-2 w-14 text-center">Score</th>
-            <th class="py-2.5 px-2 w-12 text-center hidden sm:table-cell">Corr</th>
-            <th class="py-2.5 px-2 w-14 text-center hidden lg:table-cell">Dir Acc</th>
-            <th class="py-2.5 px-2 w-11 text-center hidden sm:table-cell">7d</th>
-            <th class="py-2.5 px-2 w-11 text-center hidden md:table-cell">30d</th>
-            <th class="py-2.5 px-2 pr-4 w-20 text-right"></th>
+          <tr class="text-[11px] text-gray-500 uppercase tracking-wider font-medium" style="background:rgba(255,255,255,0.015)">
+            <th class="py-3 px-4 pl-5 w-7"></th>
+            <th class="py-3 px-3 w-[52px] text-center">Score</th>
+            <th class="py-3 px-3">Indicator</th>
+            <th class="py-3 px-3 w-14 text-center hidden sm:table-cell">Corr</th>
+            <th class="py-3 px-3 w-14 text-center hidden lg:table-cell">Dir Acc</th>
+            <th class="py-3 px-3 w-14 text-center hidden lg:table-cell">Pred</th>
+            <th class="py-3 px-3 w-12 text-center hidden sm:table-cell">7d</th>
+            <th class="py-3 px-3 w-12 text-center hidden md:table-cell">30d</th>
+            <th class="py-3 px-3 pr-5 w-20"></th>
           </tr>
         </thead>
         <tbody>`;
 
-  for (const { ind, corr, dirAcc, deltas, lastScore } of ranked) {
-    const scoreStr = lastScore != null ? lastScore.toFixed(1) : '--';
+  ranked.forEach(({ ind, corr, dirAcc, predictive, deltas, lastScore }, idx) => {
     const sColor = lastScore != null ? scoreColor(lastScore) : '#6b7280';
     const corrStr = corr != null ? (corr > 0 ? '+' : '') + corr.toFixed(2) : '--';
     const corrClr = corr != null ? (Math.abs(corr) > 0.5 ? '#4ade80' : Math.abs(corr) > 0.3 ? '#fbbf24' : '#9ca3af') : '#4b5563';
     const dirAccStr = dirAcc != null ? dirAcc.toFixed(0) + '%' : '--';
     const dirAccClr = dirAcc != null ? (dirAcc > 55 ? '#4ade80' : dirAcc > 50 ? '#fbbf24' : '#9ca3af') : '#4b5563';
+    const predStr = predictive ? predictive.score.toString() : '--';
+    const predClr = predictive ? (predictive.score > 60 ? '#4ade80' : predictive.score > 40 ? '#fbbf24' : '#9ca3af') : '#4b5563';
     const escapedName = ind.name.replace(/'/g, "\\'");
     const marketCount = ind.markets ? Object.keys(ind.markets).length : 0;
+    const label = lastScore != null ? scoreLabel(lastScore) : '';
+    const sectorTag = (ind.sector && ind.sector !== 'crypto') ? `<span class="text-[9px] uppercase tracking-wide text-gray-600 bg-gray-800/60 px-1.5 py-0.5 rounded ml-1.5">${ind.sector}</span>` : '';
 
     html += `
-          <tr class="group">
-            <td class="py-2.5 px-2 pl-4 align-middle">
+          <tr class="group ind-row-anim cursor-pointer" style="animation-delay:${idx * 40}ms" onclick="location.hash='#indicator?id=${ind.id}'">
+            <td class="py-4 px-4 pl-5 align-middle" onclick="event.stopPropagation()">
               <input type="checkbox" data-compare-id="${ind.id}" onchange="toggleCompareIndicator('${ind.id}')"
-                class="w-3 h-3 rounded cursor-pointer" style="accent-color:#60a5fa">
+                class="w-3.5 h-3.5 rounded cursor-pointer opacity-40 group-hover:opacity-100 transition-opacity" style="accent-color:#60a5fa">
             </td>
-            <td class="py-2.5 px-2 align-middle">
-              <div class="h-7 w-[72px]"><canvas id="spark-${ind.id}"></canvas></div>
+            <td class="py-4 px-3 align-middle">
+              ${scoreRingSvg(lastScore, sColor)}
             </td>
-            <td class="py-2.5 px-2 align-middle">
-              <div class="text-[13px] text-gray-200 font-medium leading-tight">${ind.name}</div>
-              <div class="text-[10px] text-gray-600 mt-0.5">
-                ${marketCount > 0 ? marketCount + 'm' : ''}${ind.fgEnabled ? ' <span class="text-green-500">F&G</span>' : ''}
+            <td class="py-4 px-3 align-middle">
+              <div class="flex items-center gap-3">
+                <div class="hidden sm:block h-8 w-[80px] shrink-0"><canvas id="spark-${ind.id}"></canvas></div>
+                <div class="min-w-0">
+                  <div class="text-[13px] text-gray-100 font-medium leading-tight truncate">${ind.name}${sectorTag}</div>
+                  <div class="flex items-center gap-2 mt-0.5">
+                    ${!ind._isOwned && ind.creator ? `<span class="text-[10px] text-gray-500">by ${ind.creator}</span>` : ''}
+                    ${marketCount > 0 ? `<span class="text-[10px] text-gray-500">${marketCount} markets</span>` : ''}
+                    ${ind.fgEnabled ? '<span class="text-[10px] text-green-500/80">F&G</span>' : ''}
+                    ${label ? `<span class="text-[10px] text-gray-600">${label}</span>` : ''}
+                  </div>
+                </div>
               </div>
             </td>
-            <td class="py-2.5 px-2 text-center align-middle">
-              <span class="text-sm font-semibold tabular-nums" style="color:${sColor}">${scoreStr}</span>
+            <td class="py-4 px-3 text-center align-middle tabular-nums hidden sm:table-cell" style="color:${corrClr}">
+              <div class="text-[13px] font-medium">${corrStr}</div>
             </td>
-            <td class="py-2.5 px-2 text-center align-middle tabular-nums hidden sm:table-cell" style="color:${corrClr}">${corrStr}</td>
-            <td class="py-2.5 px-2 text-center align-middle tabular-nums hidden lg:table-cell" style="color:${dirAccClr}">${dirAccStr}</td>
-            <td class="py-2.5 px-2 text-center align-middle tabular-nums hidden sm:table-cell">${fmtDelta(deltas['1W'])}</td>
-            <td class="py-2.5 px-2 text-center align-middle tabular-nums hidden md:table-cell">${fmtDelta(deltas['1M'])}</td>
-            <td class="py-2.5 px-2 pr-4 text-right align-middle">
-              <span class="inline-flex gap-0.5 opacity-40 group-hover:opacity-100 transition-opacity">
-                <button onclick="openAlertModal('${ind.id}','${escapedName}')" class="p-1 text-gray-400 hover:text-blue-400 transition-colors" title="Alert">&#128276;</button>
-                <button onclick="editIndicator('${ind.id}')" class="p-1 text-gray-400 hover:text-blue-400 transition-colors" title="Edit">&#9998;</button>
-                <button onclick="confirmDeleteIndicator('${ind.id}')" class="p-1 text-gray-400 hover:text-red-400 transition-colors" title="Delete">&times;</button>
+            <td class="py-4 px-3 text-center align-middle tabular-nums hidden lg:table-cell" style="color:${dirAccClr}">
+              <div class="text-[13px]">${dirAccStr}</div>
+            </td>
+            <td class="py-4 px-3 text-center align-middle tabular-nums hidden lg:table-cell" style="color:${predClr}">
+              <div class="text-[13px]">${predStr}</div>
+            </td>
+            <td class="py-4 px-3 text-center align-middle tabular-nums hidden sm:table-cell">
+              <div class="text-[12px]">${fmtDelta(deltas['1W'])}</div>
+            </td>
+            <td class="py-4 px-3 text-center align-middle tabular-nums hidden md:table-cell">
+              <div class="text-[12px]">${fmtDelta(deltas['1M'])}</div>
+            </td>
+            <td class="py-4 px-3 pr-5 text-right align-middle" onclick="event.stopPropagation()">
+              <span class="inline-flex gap-1 opacity-0 group-hover:opacity-100 transition-all duration-200">
+                <button onclick="openAlertModal('${ind.id}','${escapedName}')" class="ind-action text-gray-500 hover:text-blue-400" title="Set alert">${svgAlert}</button>
+                ${ind._isOwned ? `
+                <button onclick="editIndicator('${ind.id}')" class="ind-action text-gray-500 hover:text-blue-400" title="Edit">${svgEdit}</button>
+                <button onclick="confirmDeleteIndicator('${ind.id}')" class="ind-action text-gray-500 hover:text-red-400" title="Delete">${svgTrash}</button>
+                ` : `
+                <button onclick="forkIndicator('${ind.id}')" class="ind-action text-gray-500 hover:text-green-400" title="Fork">${svgFork}</button>
+                `}
               </span>
             </td>
           </tr>`;
-  }
+  });
 
   html += '</tbody></table></div>';
   return html;
 }
 
 function renderIndicatorCards(ranked) {
-  let html = '<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">';
-  for (const { ind, corr, dirAcc, deltas, lastScore } of ranked) {
-    const scoreStr = lastScore != null ? lastScore.toFixed(1) : '--';
+  const svgAlertSm = '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>';
+  const svgEditSm = '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>';
+  const svgTrashSm = '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>';
+  const svgForkSm = '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 4h10v10H4zM10 10h10v10H10z"/></svg>';
+
+  let html = '<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">';
+  ranked.forEach(({ ind, corr, dirAcc, predictive, deltas, lastScore }, idx) => {
     const sColor = lastScore != null ? scoreColor(lastScore) : '#6b7280';
     const corrStr = corr != null ? (corr > 0 ? '+' : '') + corr.toFixed(2) : '--';
+    const corrClr = corr != null ? (Math.abs(corr) > 0.5 ? '#4ade80' : Math.abs(corr) > 0.3 ? '#fbbf24' : '#9ca3af') : '#6b7280';
+    const dirAccStr = dirAcc != null ? dirAcc.toFixed(0) + '%' : '--';
+    const dirAccClr = dirAcc != null ? (dirAcc > 55 ? '#4ade80' : dirAcc > 50 ? '#fbbf24' : '#9ca3af') : '#6b7280';
+    const predStr = predictive ? predictive.score.toString() : '--';
+    const predClr = predictive ? (predictive.score > 60 ? '#4ade80' : predictive.score > 40 ? '#fbbf24' : '#9ca3af') : '#6b7280';
     const marketCount = ind.markets ? Object.keys(ind.markets).length : 0;
     const escapedName = ind.name.replace(/'/g, "\\'");
     const label = lastScore != null ? scoreLabel(lastScore) : '';
-    const d7 = deltas['1W'];
-    const d7Str = d7 != null ? (d7 > 0 ? '+' : '') + d7.toFixed(1) : '--';
-    const d7Color = d7 > 0 ? 'text-green-400' : d7 < 0 ? 'text-red-400' : 'text-gray-500';
+    const sectorTag = (ind.sector && ind.sector !== 'crypto') ? `<span class="text-[9px] uppercase tracking-wide text-gray-500 bg-gray-700/40 px-1.5 py-0.5 rounded">${ind.sector}</span>` : '';
 
     html += `
-      <div class="group bg-gray-900/50 rounded-xl border border-gray-800/50 hover:border-gray-700/50 transition-all hover:bg-gray-900/70 overflow-hidden">
-        <div class="p-4 pb-2">
-          <div class="flex items-start justify-between">
-            <div class="flex-1 min-w-0 mr-3">
-              <div class="text-sm font-medium text-gray-200 truncate">${ind.name}</div>
-              <div class="text-[10px] text-gray-600 mt-0.5">${marketCount}m${ind.fgEnabled ? ' <span class="text-green-500">F&G</span>' : ''}</div>
+      <div class="group ind-card-anim bg-gray-800/30 rounded-xl border border-gray-700/30 hover:border-gray-600/50 transition-all duration-200 hover:bg-gray-800/50 hover:shadow-lg hover:shadow-black/20 overflow-hidden flex flex-col cursor-pointer" style="animation-delay:${idx * 50}ms" onclick="location.hash='#indicator?id=${ind.id}'">
+        <div class="p-5 pb-3 flex items-start gap-4">
+          ${scoreRingSvg(lastScore, sColor)}
+          <div class="flex-1 min-w-0">
+            <div class="text-[13px] font-semibold text-gray-100 truncate leading-tight">${ind.name}</div>
+            <div class="flex items-center gap-2 mt-1 flex-wrap">
+              ${!ind._isOwned && ind.creator ? `<span class="text-[10px] text-gray-500">by ${ind.creator}</span>` : ''}
+              ${sectorTag}
+              <span class="text-[10px] text-gray-500">${marketCount} market${marketCount !== 1 ? 's' : ''}</span>
+              ${ind.fgEnabled ? '<span class="text-[10px] text-green-500/80">F&G</span>' : ''}
+              ${label ? `<span class="text-[10px] text-gray-600">${label}</span>` : ''}
             </div>
-            <div class="text-right shrink-0">
-              <div class="text-xl font-bold tabular-nums" style="color:${sColor}">${scoreStr}</div>
-              <div class="text-[10px] text-gray-500">${label}</div>
-            </div>
+          </div>
+          <div class="flex gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-all duration-200" onclick="event.stopPropagation()">
+            <button onclick="openAlertModal('${ind.id}','${escapedName}')" class="ind-action text-gray-500 hover:text-blue-400" title="Set alert">${svgAlertSm}</button>
+            ${ind._isOwned ? `
+            <button onclick="editIndicator('${ind.id}')" class="ind-action text-gray-500 hover:text-blue-400" title="Edit">${svgEditSm}</button>
+            <button onclick="confirmDeleteIndicator('${ind.id}')" class="ind-action text-gray-500 hover:text-red-400" title="Delete">${svgTrashSm}</button>
+            ` : `
+            <button onclick="forkIndicator('${ind.id}')" class="ind-action text-gray-500 hover:text-green-400" title="Fork">${svgForkSm}</button>
+            `}
           </div>
         </div>
-        <div class="px-4 h-10"><canvas id="spark-${ind.id}"></canvas></div>
-        <div class="flex items-center justify-between px-4 py-2.5 mt-1 border-t border-gray-800/30">
-          <div class="flex gap-3 text-[11px] text-gray-500 tabular-nums">
-            <span>r=${corrStr}</span>
-            <span class="${d7Color}">7d: ${d7Str}</span>
-          </div>
-          <div class="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-            <button onclick="editIndicator('${ind.id}')" class="p-1 text-gray-500 hover:text-blue-400 transition-colors text-xs" title="Edit">&#9998;</button>
-            <button onclick="confirmDeleteIndicator('${ind.id}')" class="p-1 text-gray-500 hover:text-red-400 transition-colors text-xs" title="Delete">&times;</button>
+
+        <div class="px-5 h-12 mt-auto"><canvas id="spark-${ind.id}"></canvas></div>
+
+        <div class="px-5 py-3 mt-2 border-t border-gray-700/20 bg-gray-900/20">
+          <div class="flex items-center gap-2 flex-wrap tabular-nums">
+            <span class="stat-pill" style="color:${corrClr}"><span class="text-gray-600 text-[10px]">r</span> ${corrStr}</span>
+            <span class="stat-pill" style="color:${dirAccClr}"><span class="text-gray-600 text-[10px]">acc</span> ${dirAccStr}</span>
+            <span class="stat-pill" style="color:${predClr}"><span class="text-gray-600 text-[10px]">pred</span> ${predStr}</span>
+            <span class="stat-pill">${fmtDelta(deltas['1W'])}<span class="text-gray-600 text-[10px] ml-0.5">7d</span></span>
+            <span class="stat-pill">${fmtDelta(deltas['1M'])}<span class="text-gray-600 text-[10px] ml-0.5">30d</span></span>
           </div>
         </div>
       </div>`;
-  }
+  });
   html += '</div>';
   return html;
 }
@@ -677,12 +798,285 @@ async function editIndicator(id) {
   location.hash = '#builder?id=' + id;
 }
 
+async function forkIndicator(id) {
+  const ind = (await getIndicators()).find(i => i.id === id);
+  if (!ind) {
+    // Fetch directly if not in cache
+    try {
+      const res = await fetch('/api/indicators/' + id);
+      if (!res.ok) throw new Error('Not found');
+      const data = await res.json();
+      forkFromData(data, id);
+    } catch (err) { console.error('Fork failed:', err); }
+    return;
+  }
+  forkFromData(ind, id);
+}
+
+function forkFromData(ind, sourceId) {
+  builderState.editingId = null;
+  builderState._pendingName = (ind.name || 'Indicator') + ' (fork)';
+  builderState._pendingForkedFrom = sourceId;
+  builderState.fgEnabled = ind.fgEnabled || false;
+  builderState.fgWeight = ind.fgWeight || 30;
+  builderState.referenceAsset = ind.referenceAsset || null;
+  builderState.initialized = false;
+
+  if (ind.markets) {
+    builderState.selectedMarkets = typeof ind.markets === 'object'
+      ? JSON.parse(JSON.stringify(ind.markets))
+      : {};
+  } else if (ind.weights) {
+    builderState.selectedMarkets = {};
+  }
+
+  location.hash = '#builder';
+}
+
 async function confirmDeleteIndicator(id) {
   const ind = (await getIndicators()).find(i => i.id === id);
   if (ind && confirm(`Delete "${ind.name}"?`)) {
     await deleteIndicator(id);
-    renderIndicatorsPage();
+    if (location.hash.startsWith('#indicator?')) {
+      location.hash = '#indicators';
+    } else {
+      renderIndicatorsPage();
+    }
   }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// PAGE 1b: INDICATOR DETAIL
+// ═════════════════════════════════════════════════════════════════════════════
+
+let detailChartInstance = null;
+
+async function renderIndicatorDetail() {
+  const hash = location.hash;
+  const params = new URLSearchParams(hash.includes('?') ? hash.split('?')[1] : '');
+  const id = params.get('id');
+  const container = document.getElementById('indicator-detail');
+  if (!container || !id) { location.hash = '#indicators'; return; }
+
+  if (detailChartInstance) { detailChartInstance.destroy(); detailChartInstance = null; }
+
+  const indicators = await getIndicators();
+  const ind = indicators.find(i => i.id === id);
+  if (!ind) {
+    container.innerHTML = '<div class="text-center py-12"><p class="text-gray-500">Indicator not found</p><a href="#indicators" class="text-blue-400 text-sm mt-2 inline-block">Back to indicators</a></div>';
+    return;
+  }
+
+  const sector = ind.sector || 'crypto';
+  await ensureSectorsLoaded(SECTOR_ORDER);
+  const sectorData = sectorDataCache[sector];
+
+  const ts = sectorData ? computeIndicatorTimeseries(ind, sectorData) : { dates: [], scores: [], prices: [] };
+  const corr = computeCorrelation(ts.scores, ts.prices);
+  const dirAcc = computeDirectionalAccuracy(ts.scores, ts.prices);
+  const predictive = computePredictiveScore(ts.scores, ts.prices);
+  const deltas = computePeriodDeltas(ts.scores, ts.dates);
+  const lastScore = [...ts.scores].reverse().find(s => s != null);
+  const sColor = lastScore != null ? scoreColor(lastScore) : '#6b7280';
+  const label = lastScore != null ? scoreLabel(lastScore) : '';
+  const marketCount = ind.markets ? Object.keys(ind.markets).length : 0;
+  const escapedName = ind.name.replace(/'/g, "\\'");
+
+  const corrStr = corr != null ? (corr > 0 ? '+' : '') + corr.toFixed(3) : '--';
+  const corrClr = corr != null ? (Math.abs(corr) > 0.5 ? '#4ade80' : Math.abs(corr) > 0.3 ? '#fbbf24' : '#9ca3af') : '#6b7280';
+  const dirAccStr = dirAcc != null ? dirAcc.toFixed(1) + '%' : '--';
+  const dirAccClr = dirAcc != null ? (dirAcc > 55 ? '#4ade80' : dirAcc > 50 ? '#fbbf24' : '#9ca3af') : '#6b7280';
+  const predStr = predictive ? predictive.score.toString() : '--';
+  const predClr = predictive ? (predictive.score > 60 ? '#4ade80' : predictive.score > 40 ? '#fbbf24' : '#9ca3af') : '#6b7280';
+  const lagStr = predictive ? `${predictive.optimalLag}d` : '--';
+
+  const refKey = ind.referenceAsset || 'btc_price';
+  const refMeta = typeof ALL_REFERENCE_ASSETS !== 'undefined' ? ALL_REFERENCE_ASSETS.find(a => a.key === refKey) : null;
+  const refLabel = refMeta?.label || refKey;
+
+  // Build markets list
+  let marketsHtml = '';
+  if (ind.markets && marketCount > 0) {
+    const entries = [];
+    for (const [mid, rawW] of Object.entries(ind.markets)) {
+      const w = typeof rawW === 'object' ? (rawW.w ?? 100) : (typeof rawW === 'number' ? rawW : 100);
+      const flip = typeof rawW === 'object' ? !!rawW.flip : false;
+      let name = mid, prob = null;
+      for (const sId of SECTOR_ORDER) {
+        const sd = sectorDataCache[sId];
+        if (!sd?.sandbox?.assets) continue;
+        for (const [, ad] of Object.entries(sd.sandbox.assets)) {
+          if (ad.markets?.[mid]) { name = ad.markets[mid].q || mid; prob = ad.markets[mid].prob; break; }
+        }
+        if (name !== mid) break;
+      }
+      entries.push({ mid, name, w, flip, prob });
+    }
+    entries.sort((a, b) => b.w - a.w);
+    marketsHtml = entries.map(m => {
+      const probStr = m.prob != null ? `${(m.prob * 100).toFixed(0)}%` : '';
+      return `<div class="flex items-center gap-3 py-2 px-3 rounded-lg hover:bg-gray-800/40 transition-colors text-sm">
+        <div class="w-8 text-right text-[11px] tabular-nums text-gray-500 shrink-0">${m.w}%</div>
+        ${m.flip ? '<span class="text-[10px] text-red-400/70 w-6 shrink-0">INV</span>' : '<span class="w-6 shrink-0"></span>'}
+        <div class="flex-1 min-w-0 text-gray-300 truncate">${m.name}</div>
+        ${probStr ? `<span class="text-[11px] tabular-nums text-gray-500 shrink-0">${probStr}</span>` : ''}
+      </div>`;
+    }).join('');
+  }
+
+  container.innerHTML = `
+    <div class="flex items-center gap-3 mb-6">
+      <a href="#indicators" class="p-1.5 text-gray-500 hover:text-gray-300 transition-colors rounded-lg hover:bg-gray-800/40">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+      </a>
+      <div class="flex-1 min-w-0">
+        <h1 class="text-xl font-semibold text-gray-100 truncate">${ind.name}</h1>
+        <div class="flex items-center gap-2 mt-0.5 flex-wrap">
+          ${!ind._isOwned && (ind.creator || ind.creatorName) ? `<span class="text-[10px] text-gray-500">by ${ind.creator || ind.creatorName}</span>` : ''}
+          ${ind.sector ? `<span class="text-[10px] uppercase tracking-wide text-gray-500 bg-gray-800/60 px-1.5 py-0.5 rounded">${ind.sector}</span>` : ''}
+          <span class="text-[10px] text-gray-600">${marketCount} markets</span>
+          ${ind.fgEnabled ? '<span class="text-[10px] text-green-500/80">F&G blended</span>' : ''}
+          <span class="text-[10px] text-gray-600">vs ${refLabel}</span>
+          ${ind.publishedAt ? `<span class="text-[10px] text-gray-600">Published ${new Date(ind.publishedAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</span>` : ''}
+          ${(ind.forkCount || 0) > 0 ? `<span class="text-[10px] text-blue-400">${ind.forkCount} fork${ind.forkCount !== 1 ? 's' : ''}</span>` : ''}
+          ${ind.forkedFrom ? `<span class="text-[10px] text-gray-500">Forked from <a href="#indicator?id=${ind.forkedFrom}" class="text-blue-400 hover:underline" onclick="event.stopPropagation()">source</a></span>` : ''}
+        </div>
+      </div>
+      <div class="flex gap-2">
+        ${ind._isOwned ? `
+        <button onclick="editIndicator('${ind.id}')" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-400 bg-gray-800/60 border border-gray-700/40 rounded-lg hover:border-blue-500/40 hover:text-blue-400 transition-colors">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+          Edit
+        </button>
+        <button onclick="confirmDeleteIndicator('${ind.id}')" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-400 bg-gray-800/60 border border-gray-700/40 rounded-lg hover:border-red-500/40 hover:text-red-400 transition-colors">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+          Delete
+        </button>
+        ` : `
+        <button onclick="forkIndicator('${ind.id}')" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-400 bg-gray-800/60 border border-gray-700/40 rounded-lg hover:border-green-500/40 hover:text-green-400 transition-colors">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 4h10v10H4zM10 10h10v10H10z"/></svg>
+          Fork
+        </button>
+        `}
+      </div>
+    </div>
+
+    <div class="flex items-center gap-6 mb-6 flex-wrap">
+      <div class="flex items-center gap-4">
+        ${scoreRingSvg(lastScore, sColor, 72)}
+        <div><div class="text-sm text-gray-400">${label}</div></div>
+      </div>
+      <div class="flex flex-wrap items-center gap-2">
+        <span class="stat-pill"><span class="text-gray-600 text-[10px]">r</span> <span style="color:${corrClr}">${corrStr}</span></span>
+        <span class="stat-pill"><span class="text-gray-600 text-[10px]">dir acc</span> <span style="color:${dirAccClr}">${dirAccStr}</span></span>
+        <span class="stat-pill"><span class="text-gray-600 text-[10px]">pred</span> <span style="color:${predClr}">${predStr}</span></span>
+        <span class="stat-pill"><span class="text-gray-600 text-[10px]">lag</span> ${lagStr}</span>
+        <span class="stat-pill">${fmtDelta(deltas['1W'])} <span class="text-gray-600 text-[10px] ml-0.5">7d</span></span>
+        <span class="stat-pill">${fmtDelta(deltas['1M'])} <span class="text-gray-600 text-[10px] ml-0.5">30d</span></span>
+        <span class="stat-pill">${fmtDelta(deltas['3M'])} <span class="text-gray-600 text-[10px] ml-0.5">90d</span></span>
+      </div>
+    </div>
+
+    <div class="bg-gray-800/30 rounded-xl border border-gray-700/30 p-5 mb-6">
+      <div style="height:320px"><canvas id="detail-chart"></canvas></div>
+    </div>
+
+    ${marketCount > 0 ? `
+    <div class="bg-gray-800/30 rounded-xl border border-gray-700/30 p-5">
+      <h3 class="text-sm font-medium text-gray-300 mb-3">Markets <span class="text-gray-600 font-normal">(${marketCount})</span></h3>
+      <div class="max-h-[400px] overflow-y-auto space-y-0.5">${marketsHtml}</div>
+    </div>` : ''}
+  `;
+
+  // Render chart
+  requestAnimationFrame(() => {
+    const canvas = document.getElementById('detail-chart');
+    if (!canvas) return;
+    const refFmt = refMeta?.format || '$';
+    const tickCb = refFmt === '%'
+      ? (v => v.toFixed(1) + '%')
+      : (v => v >= 1000 ? '$' + (v/1000).toFixed(0) + 'K' : '$' + v.toFixed(0));
+
+    detailChartInstance = new Chart(canvas.getContext('2d'), {
+      type: 'line',
+      data: {
+        labels: ts.dates.map(d => new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })),
+        datasets: [
+          {
+            label: 'Indicator Score',
+            data: ts.scores,
+            borderColor: '#60a5fa',
+            backgroundColor: 'rgba(96,165,250,0.08)',
+            borderWidth: 2,
+            fill: true,
+            tension: 0.3,
+            pointRadius: 0,
+            pointHitRadius: 8,
+            yAxisID: 'y',
+          },
+          ...(ts.prices.some(p => p != null) ? [{
+            label: refLabel,
+            data: ts.prices,
+            borderColor: '#9ca3af',
+            borderWidth: 1.5,
+            borderDash: [4, 3],
+            fill: false,
+            tension: 0.3,
+            pointRadius: 0,
+            pointHitRadius: 8,
+            yAxisID: 'y2',
+          }] : []),
+        ],
+      },
+      plugins: [typeof neutralLinePlugin !== 'undefined' ? neutralLinePlugin : {}],
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: 400 },
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: {
+            position: 'bottom',
+            labels: { color: '#9ca3af', usePointStyle: true, pointStyle: 'line', padding: 16, font: { size: 11 } },
+          },
+          tooltip: {
+            backgroundColor: 'rgba(17,24,39,0.95)',
+            titleColor: '#e5e7eb', bodyColor: '#9ca3af',
+            borderColor: '#374151', borderWidth: 1, padding: 12,
+            callbacks: {
+              label(ctx) {
+                const val = ctx.parsed.y;
+                if (val == null) return null;
+                if (ctx.dataset.yAxisID === 'y2') {
+                  if (refFmt === '%') return ctx.dataset.label + ': ' + val.toFixed(2) + '%';
+                  return ctx.dataset.label + ': $' + val.toLocaleString();
+                }
+                return ctx.dataset.label + ': ' + val.toFixed(1) + '/100';
+              },
+            },
+          },
+        },
+        scales: {
+          y: {
+            type: 'linear', position: 'left', min: 0, max: 100,
+            grid: { color: 'rgba(255,255,255,0.04)' },
+            ticks: { color: '#6b7280', font: { size: 11 } },
+            title: { display: true, text: 'Score (0-100)', color: '#6b7280', font: { size: 11 } },
+          },
+          y2: {
+            type: 'linear', position: 'right', display: ts.prices.some(p => p != null),
+            grid: { display: false },
+            ticks: { color: '#9ca3af', font: { size: 11 }, callback: tickCb },
+            title: { display: true, text: refLabel, color: '#9ca3af', font: { size: 11 } },
+          },
+          x: {
+            grid: { display: false },
+            ticks: { color: '#6b7280', font: { size: 11 }, maxRotation: 0, maxTicksLimit: 12 },
+          },
+        },
+      },
+    });
+  });
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -693,6 +1087,20 @@ async function renderBuilderPage() {
   const hash = location.hash;
   const params = new URLSearchParams(hash.includes('?') ? hash.split('?')[1] : '');
   const editId = params.get('id');
+  const forkId = params.get('fork');
+
+  // Fork from an existing indicator via URL param
+  if (forkId && !builderState._forkLoaded) {
+    builderState._forkLoaded = forkId;
+    try {
+      const res = await fetch('/api/indicators/' + forkId);
+      if (res.ok) {
+        const ind = await res.json();
+        forkFromData(ind, forkId);
+        return; // forkFromData navigates to #builder, which re-triggers render
+      }
+    } catch (err) { console.error('Fork load failed:', err); }
+  }
 
   // If editing, load from indicator
   if (editId && editId !== builderState.editingId) {
@@ -868,8 +1276,8 @@ function renderBuilderBasket() {
   const count = Object.keys(selected).length;
   if (count === 0) {
     el.innerHTML = `<div class="text-center pb-2">
-      <div class="text-xs text-gray-500">No markets selected</div>
-      <div class="text-[10px] text-gray-600 mt-0.5">Check markets below to build</div>
+      <div class="text-xs text-gray-400">No markets selected</div>
+      <div class="text-[10px] text-gray-500 mt-0.5">Check markets below to build</div>
     </div>`;
     return;
   }
@@ -947,13 +1355,13 @@ function renderBuilderMarketPicker() {
     html += `<div>
       <div class="flex items-center justify-between mb-1 cursor-pointer select-none group/cat" onclick="toggleCatCollapse('${cat}')">
         <div class="flex items-center gap-1.5">
-          <span class="text-[10px] text-gray-600 w-2.5">${collapsed ? '▸' : '▾'}</span>
-          <span class="text-[11px] font-medium" style="color:${meta.accent}">${meta.label}</span>
-          <span class="text-[10px] text-gray-600 tabular-nums">${selectedInCat.length}/${list.length}</span>
+          <span class="text-[10px] text-gray-500 w-2.5">${collapsed ? '▸' : '▾'}</span>
+          <span class="text-[11px] font-semibold" style="color:${meta.accent}">${meta.label}</span>
+          <span class="text-[10px] text-gray-500 tabular-nums">${selectedInCat.length}/${list.length}</span>
         </div>
         <div class="flex gap-1.5 opacity-0 group-hover/cat:opacity-100 transition-opacity" onclick="event.stopPropagation()">
-          <button onclick="selectAllMarketsInCat('${cat}',true)" class="text-[10px] text-gray-600 hover:text-gray-300 transition-colors">All</button>
-          <button onclick="selectAllMarketsInCat('${cat}',false)" class="text-[10px] text-gray-600 hover:text-gray-300 transition-colors">None</button>
+          <button onclick="selectAllMarketsInCat('${cat}',true)" class="text-[10px] text-gray-500 hover:text-gray-300 transition-colors">All</button>
+          <button onclick="selectAllMarketsInCat('${cat}',false)" class="text-[10px] text-gray-500 hover:text-gray-300 transition-colors">None</button>
         </div>
       </div>`;
 
@@ -968,17 +1376,17 @@ function renderBuilderMarketPicker() {
         const volStr = _fmtVol(m.vol);
         const selectedBg = isSelected
           ? (flipped ? 'bg-red-500/5 border-red-500/20' : 'bg-blue-500/5 border-blue-500/20')
-          : 'border-transparent hover:bg-gray-800/30';
+          : 'border-transparent hover:bg-gray-700/20';
 
         html += `
-          <div class="flex items-start gap-2 py-1 px-1.5 rounded border ${selectedBg} transition-colors group/row cursor-pointer" onclick="toggleMarketFromRow('${m.mid}', event)">
+          <div class="flex items-start gap-2 py-1.5 px-2 rounded border ${selectedBg} transition-colors group/row cursor-pointer" onclick="toggleMarketFromRow('${m.mid}', event)">
             <input type="checkbox" ${isSelected ? 'checked' : ''} onchange="toggleMarket('${m.mid}', this.checked); event.stopPropagation()"
               class="rounded bg-gray-700 border-gray-600 w-3 h-3 shrink-0 cursor-pointer mt-0.5" style="accent-color:${meta.accent}">
             <div class="flex-1 min-w-0">
-              <div class="text-[11px] leading-tight ${isSelected ? 'text-gray-200' : 'text-gray-400'}" title="${m.q}">
+              <div class="text-xs leading-tight ${isSelected ? 'text-gray-100' : 'text-gray-400'}" title="${m.q}">
                 ${flipped ? '<span class="text-red-400 font-medium mr-0.5" title="Inverted signal">&minus;</span>' : ''}${m.q}
               </div>
-              <div class="flex items-center gap-2 mt-0.5 text-[9px] text-gray-600">
+              <div class="flex items-center gap-2 mt-0.5 text-[10px] text-gray-500">
                 ${probPct != null ? `<span class="tabular-nums">${probPct}%</span>` : ''}
                 ${volStr ? `<span>${volStr}</span>` : ''}
                 ${endShort ? `<span>${endShort}</span>` : ''}
@@ -987,7 +1395,7 @@ function renderBuilderMarketPicker() {
             ${isSelected ? `
               <div class="flex items-center gap-1 shrink-0 mt-0.5">
                 <button onclick="toggleMarketFlip('${m.mid}', event)" title="${flipped ? 'Signal inverted (click to restore)' : 'Invert signal (bearish)'}"
-                  class="w-5 h-5 flex items-center justify-center rounded text-[10px] transition-colors ${flipped ? 'bg-red-500/20 text-red-400' : 'text-gray-600 hover:text-gray-400 hover:bg-gray-700/50'}">&plusmn;</button>
+                  class="w-5 h-5 flex items-center justify-center rounded text-[10px] transition-colors ${flipped ? 'bg-red-500/20 text-red-400' : 'text-gray-500 hover:text-gray-400 hover:bg-gray-700/50'}">&plusmn;</button>
                 <input type="range" min="0" max="200" value="${weight}" step="5"
                   data-mid="${m.mid}" oninput="onMarketWeightSlider(this)" onclick="event.stopPropagation()"
                   class="w-12 h-1 rounded-full appearance-none cursor-pointer bg-gray-800"
@@ -1003,8 +1411,8 @@ function renderBuilderMarketPicker() {
 
   if (!hasContent) {
     html = `<div class="text-center py-8">
-      <div class="text-xs text-gray-500">No markets match filters</div>
-      <div class="text-[10px] text-gray-600 mt-1">Try adjusting search or unchecking filters</div>
+      <div class="text-xs text-gray-400">No markets match filters</div>
+      <div class="text-[10px] text-gray-500 mt-1">Try adjusting search or unchecking filters</div>
     </div>`;
   }
 
@@ -1130,8 +1538,8 @@ function renderBuilderTestAgainst() {
   if (lastSector && lastSector !== '__none__') opts += '</optgroup>';
 
   testAgainstEl.innerHTML = `
-    <label class="text-xs text-gray-500">Test Against</label>
-    <select onchange="setBuilderReferenceAsset(this.value)" class="px-2 py-1 text-xs bg-gray-800 border border-gray-700/50 rounded text-gray-300 cursor-pointer">
+    <label class="text-xs text-gray-400">Test Against</label>
+    <select onchange="setBuilderReferenceAsset(this.value)" class="px-2 py-1 text-xs bg-gray-800/50 border border-gray-600/40 rounded text-gray-300 cursor-pointer">
       ${opts}
     </select>`;
 }
@@ -1436,19 +1844,25 @@ function renderBuilderMetrics(ts) {
 
   const corr = computeCorrelation(ts.scores, ts.prices);
   const dirAcc = computeDirectionalAccuracy(ts.scores, ts.prices);
+  const predictive = computePredictiveScore(ts.scores, ts.prices);
   const lastScore = [...ts.scores].reverse().find(s => s != null);
 
   const corrColor = corr != null ? (Math.abs(corr) > 0.5 ? 'text-green-400' : Math.abs(corr) > 0.3 ? 'text-yellow-400' : 'text-gray-400') : 'text-gray-500';
   const scoreStr = lastScore != null ? lastScore.toFixed(1) : '--';
   const corrStr = corr != null ? (corr > 0 ? '+' : '') + corr.toFixed(3) : '--';
   const dirStr = dirAcc != null ? dirAcc.toFixed(1) + '%' : '--';
+  const predStr = predictive ? `${predictive.score}` : '--';
+  const predColor = predictive ? (predictive.score > 60 ? 'text-green-400' : predictive.score > 40 ? 'text-yellow-400' : 'text-gray-400') : 'text-gray-500';
+  const lagStr = predictive ? `${predictive.optimalLag}d` : '';
 
   const mktCount = Object.keys(builderState.selectedMarkets).length;
   el.innerHTML = `
     <span class="text-lg font-semibold text-gray-100 tabular-nums">${scoreStr}</span>
     <span class="text-xs text-gray-500">${mktCount} markets</span>
     <span class="text-xs ${corrColor} tabular-nums">r=${corrStr}</span>
-    <span class="text-xs text-gray-500 tabular-nums">${dirStr} dir</span>`;
+    <span class="text-xs text-gray-500 tabular-nums">${dirStr} dir</span>
+    <span class="text-xs ${predColor} tabular-nums">pred=${predStr}</span>
+    ${lagStr ? `<span class="text-xs text-gray-500 tabular-nums">lag ${lagStr}</span>` : ''}`;
 }
 
 // (Market browser removed — replaced by market picker in right panel)
@@ -1470,6 +1884,31 @@ async function saveBuilderIndicator() {
     ? getIndicatorsSync().find(i => i.id === builderState.editingId)
     : null;
 
+  const bp10 = parseFloat(document.getElementById('bp-10')?.value) || null;
+  const bp50 = parseFloat(document.getElementById('bp-50')?.value) || null;
+  const bp100 = parseFloat(document.getElementById('bp-100')?.value) || null;
+  const bp500 = parseFloat(document.getElementById('bp-500')?.value) || null;
+
+  // Client-side duplicate pre-check: compare market keys + fg config against owned indicators
+  const ownedIndicators = getIndicatorsSync().filter(i => i._isOwned);
+  const newMarkets = builderState.selectedMarkets;
+  const newNormKeys = Object.keys(newMarkets).sort().join(',');
+  for (const oi of ownedIndicators) {
+    if (builderState.editingId && oi.id === builderState.editingId) continue;
+    const oiMarkets = oi.markets || {};
+    const oiKeys = Object.keys(oiMarkets).sort().join(',');
+    if (oiKeys === newNormKeys && !!oi.fgEnabled === !!builderState.fgEnabled) {
+      // Check if any weight differs by >= 1%
+      let hasDiff = false;
+      for (const k of Object.keys(newMarkets)) {
+        const nw = typeof newMarkets[k] === 'object' ? (newMarkets[k].w ?? 100) : (newMarkets[k] || 100);
+        const ow = typeof oiMarkets[k] === 'object' ? (oiMarkets[k].w ?? 100) : (oiMarkets[k] || 100);
+        if (Math.abs(nw - ow) >= 1) { hasDiff = true; break; }
+      }
+      if (!hasDiff && !confirm(`This looks very similar to "${oi.name}". Save anyway?`)) return;
+    }
+  }
+
   const indicator = {
     id: builderState.editingId || generateId(),
     name,
@@ -1478,7 +1917,8 @@ async function saveBuilderIndicator() {
     fgEnabled: builderState.fgEnabled,
     fgWeight: builderState.fgWeight,
     isPublic: true,
-    pricePer100: null,
+    bundlePrices: { 10: bp10, 50: bp50, 100: bp100, 500: bp500 },
+    forkedFrom: builderState._pendingForkedFrom || null,
     createdAt: existing?.createdAt || new Date().toISOString(),
     _fromServer: !!existing?._fromServer,
   };
@@ -1488,6 +1928,8 @@ async function saveBuilderIndicator() {
   builderState.selectedMarkets = {};
   builderState.fgEnabled = false;
   builderState.fgWeight = 30;
+  delete builderState._pendingForkedFrom;
+  delete builderState._forkLoaded;
 
   location.hash = '#indicators';
 }
@@ -1536,6 +1978,17 @@ function loadBuilderIndicator(id) {
   builderState.fgEnabled = ind.fgEnabled || false;
   builderState.fgWeight = ind.fgWeight || 30;
   builderState.referenceAsset = ind.referenceAsset || null;
+
+  // Restore bundle prices
+  const bp = ind.bundlePrices || {};
+  const bp10El = document.getElementById('bp-10');
+  const bp50El = document.getElementById('bp-50');
+  const bp100El = document.getElementById('bp-100');
+  const bp500El = document.getElementById('bp-500');
+  if (bp10El) bp10El.value = bp[10] || '';
+  if (bp50El) bp50El.value = bp[50] || '';
+  if (bp100El) bp100El.value = bp[100] || '';
+  if (bp500El) bp500El.value = bp[500] || '';
 
   if (ind.markets) {
     builderState.selectedMarkets = normalizeMarketConfig(ind.markets, ind.sector || 'crypto');
@@ -1901,25 +2354,30 @@ function renderBacktestPanel() {
   const avgTradeStr = `${result.avgTrade >= 0 ? '+' : ''}${result.avgTrade.toFixed(1)}%`;
   const avgTradeColor = result.avgTrade >= 0 ? 'text-green-400' : 'text-red-400';
 
-  const m = (label, value, color = 'text-gray-200') =>
-    `<div><div class="text-[10px] text-gray-500 uppercase tracking-wide">${label}</div><div class="${color} text-sm font-semibold tabular-nums">${value}</div></div>`;
+  const m = (label, value, color = 'text-gray-200', tip = '') =>
+    `<div${tip ? ` class="bt-tip" data-tip="${tip}"` : ''}><div class="text-[11px] text-gray-400 uppercase tracking-wide">${label}</div><div class="${color} text-sm font-semibold tabular-nums">${value}</div></div>`;
+
+  const pred = computePredictiveScore(ts.scores, ts.prices);
+  const predStr = pred ? pred.score.toString() : '--';
+  const predColor = pred ? (pred.score > 60 ? 'text-green-400' : pred.score > 40 ? 'text-yellow-400' : 'text-gray-200') : 'text-gray-200';
+  const predLagStr = pred ? `${pred.optimalLag}d` : '--';
 
   resultsEl.innerHTML = `
-    <div class="grid grid-cols-3 sm:grid-cols-5 gap-x-5 gap-y-2 mb-2">
-      ${m('Return', `${result.totalReturn >= 0 ? '+' : ''}${result.totalReturn.toFixed(1)}%`, retColor)}
-      ${m('Buy & Hold', `${result.buyHold >= 0 ? '+' : ''}${result.buyHold.toFixed(1)}%`, 'text-gray-300')}
-      ${m('Alpha', `${result.alpha >= 0 ? '+' : ''}${result.alpha.toFixed(1)}%`, alphaColor)}
-      ${m('Sharpe', sharpeStr)}
-      ${m('Sortino', sortinoStr)}
+    <div class="grid grid-cols-3 sm:grid-cols-5 gap-x-6 gap-y-3 mb-2">
+      ${m('Return', `${result.totalReturn >= 0 ? '+' : ''}${result.totalReturn.toFixed(1)}%`, retColor, 'Total strategy return. Net P&L from all trades over the backtest period.')}
+      ${m('Buy & Hold', `${result.buyHold >= 0 ? '+' : ''}${result.buyHold.toFixed(1)}%`, 'text-gray-300', 'Benchmark return from holding the asset for the entire period with no trading.')}
+      ${m('Alpha', `${result.alpha >= 0 ? '+' : ''}${result.alpha.toFixed(1)}%`, alphaColor, 'Excess return vs buy &amp; hold. Alpha = Strategy Return - Buy &amp; Hold Return.')}
+      ${m('Sharpe', sharpeStr, 'text-gray-200', 'Risk-adjusted return. (Mean daily return / Std dev of daily returns) * sqrt(365). Above 1.0 is good, above 2.0 is excellent.')}
+      ${m('Sortino', sortinoStr, 'text-gray-200', 'Like Sharpe but only penalizes downside volatility. Higher is better since it ignores upside variance.')}
     </div>
-    <div class="grid grid-cols-4 sm:grid-cols-7 gap-x-5 gap-y-2">
-      ${m('CAGR', cagrStr, cagrColor)}
-      ${m('Max DD', `\u2212${result.maxDrawdown.toFixed(1)}%`, 'text-red-400')}
-      ${m('Win Rate', `${result.winRate.toFixed(0)}%`)}
-      ${m('Profit Factor', pfStr)}
-      ${m('Trades', result.trades)}
-      ${m('Exposure', `${result.exposure.toFixed(0)}%`)}
-      ${m('Avg Trade', avgTradeStr, avgTradeColor)}
+    <div class="grid grid-cols-4 sm:grid-cols-7 gap-x-6 gap-y-3">
+      ${m('CAGR', cagrStr, cagrColor, 'Compound Annual Growth Rate. Annualized return accounting for compounding over the backtest period.')}
+      ${m('Max DD', `\u2212${result.maxDrawdown.toFixed(1)}%`, 'text-red-400', 'Maximum drawdown. Largest peak-to-trough decline in portfolio value during the backtest.')}
+      ${m('Win Rate', `${result.winRate.toFixed(0)}%`, 'text-gray-200', 'Percentage of trades that were profitable. Win Rate = Winning Trades / Total Trades.')}
+      ${m('Profit Factor', pfStr, 'text-gray-200', 'Gross profit / Gross loss. Above 1.0 means profitable overall. Above 2.0 is strong.')}
+      ${m('Trades', result.trades, 'text-gray-200', 'Total number of completed round-trip trades (entry + exit) during the backtest.')}
+      ${m('Predictive', predStr, predColor, 'Predictive score (0-100). Measures how well this indicator frontruns price moves via lagged cross-correlation.')}
+      ${m('Peak Lag', predLagStr, 'text-gray-200', 'Optimal lag in days where the indicator best predicts future price movement.')}
     </div>`;
 
   // Render trade log
@@ -1952,34 +2410,34 @@ function renderTradeLog(tradeLog) {
 
   const rows = tradeLog.slice(0, 50).map((t, idx) => `
     <tr class="${rowBg(t.pnl)}">
-      <td class="px-2 py-1 text-gray-500">${idx + 1}</td>
-      <td class="px-2 py-1">${fmtDate(t.entryDate)}</td>
-      <td class="px-2 py-1">${fmtDate(t.exitDate)}${t.open ? ' *' : ''}</td>
-      <td class="px-2 py-1 tabular-nums">$${t.entryPrice?.toFixed(2)}</td>
-      <td class="px-2 py-1 tabular-nums">$${t.exitPrice?.toFixed(2)}</td>
-      <td class="px-2 py-1 tabular-nums ${pnlColor(t.pnl)}">${fmtPnl(t.pnl)}</td>
-      <td class="px-2 py-1 tabular-nums">${t.duration}d</td>
-      <td class="px-2 py-1 tabular-nums text-gray-500">${t.entryScore?.toFixed(0)}\u2192${t.exitScore?.toFixed(0)}</td>
+      <td class="px-3 py-1.5 text-gray-500">${idx + 1}</td>
+      <td class="px-3 py-1.5">${fmtDate(t.entryDate)}</td>
+      <td class="px-3 py-1.5">${fmtDate(t.exitDate)}${t.open ? ' *' : ''}</td>
+      <td class="px-3 py-1.5 tabular-nums">$${t.entryPrice?.toFixed(2)}</td>
+      <td class="px-3 py-1.5 tabular-nums">$${t.exitPrice?.toFixed(2)}</td>
+      <td class="px-3 py-1.5 tabular-nums ${pnlColor(t.pnl)}">${fmtPnl(t.pnl)}</td>
+      <td class="px-3 py-1.5 tabular-nums">${t.duration}d</td>
+      <td class="px-3 py-1.5 tabular-nums text-gray-500">${t.entryScore?.toFixed(0)}\u2192${t.exitScore?.toFixed(0)}</td>
     </tr>`).join('');
 
   container.innerHTML = `
-    <table class="w-full text-[11px] text-gray-300 border-collapse">
-      <thead><tr class="text-[10px] text-gray-500 uppercase tracking-wide border-b border-gray-800/40">
-        <th class="px-2 py-1.5 text-left">#</th>
-        <th class="px-2 py-1.5 text-left">Entry</th>
-        <th class="px-2 py-1.5 text-left">Exit</th>
-        <th class="px-2 py-1.5 text-left">Entry $</th>
-        <th class="px-2 py-1.5 text-left">Exit $</th>
-        <th class="px-2 py-1.5 text-left">PnL</th>
-        <th class="px-2 py-1.5 text-left">Dur</th>
-        <th class="px-2 py-1.5 text-left">Score</th>
+    <table class="w-full text-xs text-gray-300 border-collapse">
+      <thead><tr class="text-[11px] text-gray-400 uppercase tracking-wide border-b border-gray-700/30">
+        <th class="px-3 py-1.5 text-left">#</th>
+        <th class="px-3 py-1.5 text-left">Entry</th>
+        <th class="px-3 py-1.5 text-left">Exit</th>
+        <th class="px-3 py-1.5 text-left">Entry $</th>
+        <th class="px-3 py-1.5 text-left">Exit $</th>
+        <th class="px-3 py-1.5 text-left">PnL</th>
+        <th class="px-3 py-1.5 text-left">Dur</th>
+        <th class="px-3 py-1.5 text-left">Score</th>
       </tr></thead>
       <tbody>${rows}</tbody>
-      <tfoot><tr class="border-t border-gray-800/40 text-gray-400 font-medium">
-        <td class="px-2 py-1.5" colspan="4">${tradeLog.length} trades</td>
-        <td class="px-2 py-1.5"></td>
-        <td class="px-2 py-1.5 tabular-nums ${pnlColor(avgPnl / 100)}">${avgPnl >= 0 ? '+' : ''}${avgPnl.toFixed(1)}%</td>
-        <td class="px-2 py-1.5 tabular-nums">${avgDur.toFixed(0)}d</td>
+      <tfoot><tr class="border-t border-gray-700/30 text-gray-400 font-medium">
+        <td class="px-3 py-1.5" colspan="4">${tradeLog.length} trades</td>
+        <td class="px-3 py-1.5"></td>
+        <td class="px-3 py-1.5 tabular-nums ${pnlColor(avgPnl / 100)}">${avgPnl >= 0 ? '+' : ''}${avgPnl.toFixed(1)}%</td>
+        <td class="px-3 py-1.5 tabular-nums">${avgDur.toFixed(0)}d</td>
         <td></td>
       </tr></tfoot>
     </table>`;
@@ -2016,7 +2474,7 @@ function _renderEquityCurve(equity, bh, dates) {
       responsive: true, maintainAspectRatio: false, animation: false,
       interaction: { mode: 'index', intersect: false },
       plugins: {
-        legend: { position: 'bottom', labels: { color: '#6b7280', usePointStyle: true, pointStyle: 'line', font: { size: 10 } } },
+        legend: { position: 'bottom', labels: { color: '#9ca3af', usePointStyle: true, pointStyle: 'line', font: { size: 10 } } },
         tooltip: {
           backgroundColor: 'rgba(17,24,39,0.95)', titleColor: '#e5e7eb', bodyColor: '#9ca3af',
           borderColor: '#374151', borderWidth: 1, padding: 8,

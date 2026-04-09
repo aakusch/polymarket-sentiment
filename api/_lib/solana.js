@@ -2,52 +2,9 @@ const { Connection, PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js');
 
 const SOLANA_RPC = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
 const PLATFORM_WALLET = process.env.PLATFORM_WALLET;
-const PMSI_TOKEN_MINT = () => process.env.PMSI_TOKEN_MINT || null;
-const CREDITS_PER_TOKEN = () => parseInt(process.env.CREDITS_PER_TOKEN || '100');
 
 function getConnection() {
   return new Connection(SOLANA_RPC, 'confirmed');
-}
-
-/**
- * Get PMSI SPL token balance for a wallet address.
- * Returns the UI amount (human-readable, accounting for decimals).
- */
-async function getTokenBalance(walletAddress) {
-  const mint = PMSI_TOKEN_MINT();
-  if (!mint || !walletAddress) return 0;
-
-  try {
-    const connection = getConnection();
-    const wallet = new PublicKey(walletAddress);
-    const mintPubkey = new PublicKey(mint);
-
-    const accounts = await connection.getParsedTokenAccountsByOwner(wallet, { mint: mintPubkey });
-    if (accounts.value.length === 0) return 0;
-
-    let total = 0;
-    for (const acct of accounts.value) {
-      total += acct.account.data.parsed.info.tokenAmount.uiAmount || 0;
-    }
-    return total;
-  } catch (err) {
-    console.error('Token balance check failed:', err.message);
-    return 0;
-  }
-}
-
-/**
- * Get token configuration for public display.
- */
-function getTokenConfig() {
-  const mint = PMSI_TOKEN_MINT();
-  return {
-    mint,
-    creditsPerToken: CREDITS_PER_TOKEN(),
-    enabled: !!mint,
-    symbol: 'PMSI',
-    name: 'Polymarket Sentiment Index',
-  };
 }
 
 /**
@@ -97,4 +54,4 @@ async function verifyTransaction(txSignature, expectedAmount, expectedMemo) {
   }
 }
 
-module.exports = { verifyTransaction, PLATFORM_WALLET, getConnection, getTokenBalance, getTokenConfig };
+module.exports = { verifyTransaction, PLATFORM_WALLET, getConnection };

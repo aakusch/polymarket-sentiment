@@ -1,37 +1,22 @@
 const { getDb } = require('../_lib/db');
 const { authenticate } = require('../_lib/auth');
-const { verifyTransaction, getTokenBalance, getTokenConfig } = require('../_lib/solana');
+const { verifyTransaction } = require('../_lib/solana');
+const { ensureBundlePricing } = require('../_lib/migrations');
 
 const PLATFORM_WALLET = process.env.PLATFORM_WALLET;
+const VALID_BUNDLES = [10, 50, 100, 500];
 
 module.exports = async function handler(req, res) {
   const { action } = req.query;
 
   switch (action) {
     case 'balance': return handleBalance(req, res);
+    case 'bundles': return handleBundles(req, res);
     case 'purchase': return handlePurchase(req, res);
     case 'verify': return handleVerify(req, res);
-    case 'token-info': return handleTokenInfo(req, res);
     default: return res.status(404).json({ error: 'Not found' });
   }
 };
-
-async function handleTokenInfo(req, res) {
-  if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
-  const config = getTokenConfig();
-  res.setHeader('Cache-Control', 's-maxage=60');
-  return res.json({
-    ...config,
-    description: 'Hold PMSI tokens to receive daily API credit allowance.',
-    pricing: `1 PMSI token = ${config.creditsPerToken} API calls/day`,
-    tiers: [
-      { name: 'Starter', tokens: 1, dailyCalls: config.creditsPerToken },
-      { name: 'Builder', tokens: 10, dailyCalls: config.creditsPerToken * 10 },
-      { name: 'Pro', tokens: 100, dailyCalls: config.creditsPerToken * 100 },
-      { name: 'Enterprise', tokens: 1000, dailyCalls: config.creditsPerToken * 1000 },
-    ],
-  });
-}
 
 async function handleBalance(req, res) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
@@ -43,23 +28,33 @@ async function handleBalance(req, res) {
     SELECT COALESCE(SUM(credits_remaining), 0) as total
     FROM api_keys WHERE user_id = ${auth.id} AND revoked_at IS NULL
   `;
-  const dbCredits = parseInt(rows[0].total);
+  const credits = parseInt(rows[0].total);
+  return res.json({ credits });
+}
 
-  const tokenConfig = getTokenConfig();
-  let tokenBalance = 0, tokenDailyAllowance = 0, tokenCallsUsedToday = 0;
+async function handleBundles(req, res) {
+  if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
-  if (tokenConfig.enabled && auth.wallet) {
-    tokenBalance = await getTokenBalance(auth.wallet);
-    tokenDailyAllowance = Math.floor(tokenBalance) * tokenConfig.creditsPerToken;
-    const today = new Date().toISOString().slice(0, 10);
-    const usage = await sql`SELECT token_calls_today, token_calls_date FROM users WHERE id = ${auth.id}`;
-    if (usage.length > 0 && usage[0].token_calls_date === today) {
-      tokenCallsUsedToday = usage[0].token_calls_today || 0;
-    }
-  }
+  const { indicatorId } = req.query;
+  if (!indicatorId) return res.status(400).json({ error: 'indicatorId query param required' });
 
-  const tokenCreditsRemaining = Math.max(0, tokenDailyAllowance - tokenCallsUsedToday);
-  return res.json({ dbCredits, tokenBalance, tokenDailyAllowance, tokenCallsUsedToday, tokenCreditsRemaining, totalAvailable: dbCredits + tokenCreditsRemaining, token: tokenConfig });
+  await ensureBundlePricing();
+
+  const sql = getDb();
+  const rows = await sql`
+    SELECT id, name, price_bundle_10, price_bundle_50, price_bundle_100, price_bundle_500
+    FROM indicators WHERE id = ${indicatorId} AND is_public = true
+  `;
+  if (rows.length === 0) return res.status(404).json({ error: 'Indicator not found' });
+
+  const ind = rows[0];
+  const bundles = VALID_BUNDLES.map(tier => ({
+    calls: tier,
+    price: ind[`price_bundle_${tier}`] ? parseFloat(ind[`price_bundle_${tier}`]) : null,
+  }));
+
+  res.setHeader('Cache-Control', 's-maxage=60');
+  return res.json({ indicatorId: ind.id, name: ind.name, bundles });
 }
 
 async function handlePurchase(req, res) {
@@ -67,34 +62,52 @@ async function handlePurchase(req, res) {
   const auth = authenticate(req);
   if (!auth) return res.status(401).json({ error: 'Unauthorized' });
 
-  const { indicatorId, credits, apiKeyId } = req.body || {};
-  if (!indicatorId || !credits || credits < 100) return res.status(400).json({ error: 'indicatorId and credits (min 100) required' });
+  await ensureBundlePricing();
+
+  const { indicatorId, bundle, apiKeyId } = req.body || {};
+  if (!indicatorId || !bundle || !VALID_BUNDLES.includes(bundle)) {
+    return res.status(400).json({ error: 'indicatorId and bundle (10, 50, 100, or 500) required' });
+  }
 
   const sql = getDb();
-  const indicators = await sql`SELECT id, price_per_100, price_token, user_id FROM indicators WHERE id = ${indicatorId}`;
+  const indicators = await sql`
+    SELECT id, price_bundle_10, price_bundle_50, price_bundle_100, price_bundle_500, user_id
+    FROM indicators WHERE id = ${indicatorId}
+  `;
   if (indicators.length === 0) return res.status(404).json({ error: 'Indicator not found' });
 
   const indicator = indicators[0];
-  const pricePer100 = indicator.price_per_100 ? parseFloat(indicator.price_per_100) : 0;
+  const priceCol = `price_bundle_${bundle}`;
+  const price = indicator[priceCol] ? parseFloat(indicator[priceCol]) : null;
 
-  if (pricePer100 === 0) {
-    if (apiKeyId) await sql`UPDATE api_keys SET credits_remaining = credits_remaining + ${credits} WHERE id = ${apiKeyId} AND user_id = ${auth.id}`;
-    return res.json({ free: true, credits });
+  if (price == null || price === 0) {
+    // Free tier — add credits directly
+    if (apiKeyId) {
+      await sql`UPDATE api_keys SET credits_remaining = credits_remaining + ${bundle} WHERE id = ${apiKeyId} AND user_id = ${auth.id}`;
+    }
+    return res.json({ free: true, credits: bundle });
   }
 
-  const amount = (pricePer100 * credits) / 100;
   const creators = await sql`SELECT wallet_address FROM users WHERE id = ${indicator.user_id}`;
   const creatorWallet = creators[0]?.wallet_address || PLATFORM_WALLET;
 
   const payments = await sql`
     INSERT INTO payments (buyer_id, indicator_id, tx_signature, amount, token, credits_purchased,
                           creator_amount, platform_amount, creator_wallet, platform_wallet, status)
-    VALUES (${auth.id}, ${indicatorId}, ${'pending_' + Date.now()}, ${amount},
-            ${indicator.price_token || 'SOL'}, ${credits}, ${amount * 0.5}, ${amount * 0.5},
+    VALUES (${auth.id}, ${indicatorId}, ${'pending_' + Date.now()}, ${price},
+            'SOL', ${bundle}, ${price * 0.5}, ${price * 0.5},
             ${creatorWallet}, ${PLATFORM_WALLET}, 'pending')
     RETURNING id
   `;
-  res.json({ paymentId: payments[0].id, amount, token: indicator.price_token || 'SOL', recipientWallet: PLATFORM_WALLET, memo: 'pmsi:' + payments[0].id, apiKeyId });
+  res.json({
+    paymentId: payments[0].id,
+    amount: price,
+    token: 'SOL',
+    credits: bundle,
+    recipientWallet: PLATFORM_WALLET,
+    memo: 'pmsi:' + payments[0].id,
+    apiKeyId,
+  });
 }
 
 async function handleVerify(req, res) {

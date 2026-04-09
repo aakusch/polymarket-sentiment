@@ -204,6 +204,7 @@ async function computeIndicator(indicator) {
   }
 
   const latestScore = [...scores].reverse().find(s => s != null);
+  const predictive = computePredictiveScore(scores, prices);
 
   return {
     dates,
@@ -211,6 +212,7 @@ async function computeIndicator(indicator) {
     prices,
     fgValues,
     latestScore,
+    predictive,
     breakdown,
     config: {
       name: indicator.name,
@@ -224,4 +226,51 @@ async function computeIndicator(indicator) {
   };
 }
 
-module.exports = { computeIndicator };
+/**
+ * Compute Predictive Score: how well indicator scores frontrun reference asset moves.
+ * Cross-correlates at multiple lag offsets, returns { score, peakCorrelation, optimalLag } or null.
+ */
+function computePredictiveScore(scores, prices) {
+  const lags = [1, 2, 3, 5, 7, 14, 21, 30];
+  let peakR = 0;
+  let peakLag = 0;
+
+  for (const lag of lags) {
+    const pairs = [];
+    for (let i = 0; i < scores.length - lag; i++) {
+      if (scores[i] != null && prices[i + lag] != null) {
+        pairs.push([scores[i], prices[i + lag]]);
+      }
+    }
+    if (pairs.length < 10) continue;
+
+    const n = pairs.length;
+    const mx = pairs.reduce((s, p) => s + p[0], 0) / n;
+    const my = pairs.reduce((s, p) => s + p[1], 0) / n;
+    let num = 0, dx2 = 0, dy2 = 0;
+    for (const [x, y] of pairs) {
+      const dx = x - mx, dy = y - my;
+      num += dx * dy;
+      dx2 += dx * dx;
+      dy2 += dy * dy;
+    }
+    const den = Math.sqrt(dx2 * dy2);
+    const r = den > 0 ? num / den : 0;
+
+    if (Math.abs(r) > Math.abs(peakR)) {
+      peakR = r;
+      peakLag = lag;
+    }
+  }
+
+  if (peakLag === 0 && peakR === 0) return null;
+
+  const score = Math.round(Math.abs(peakR) * 100 * 0.7 + (1 - peakLag / 30) * 100 * 0.3);
+  return {
+    score: Math.max(0, Math.min(100, score)),
+    peakCorrelation: Math.round(peakR * 1000) / 1000,
+    optimalLag: peakLag,
+  };
+}
+
+module.exports = { computeIndicator, computePredictiveScore };

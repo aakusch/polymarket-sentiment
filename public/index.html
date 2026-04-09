@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" class="bg-gray-950">
+<html lang="en" class="bg-[#0f1117]">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -16,17 +16,37 @@
     .nav-link.active { color: #e5e7eb; border-bottom-color: #60a5fa; }
     .sparkline { display: inline-block; vertical-align: middle; }
     input[type=range] { -webkit-appearance: none; background: transparent; }
-    input[type=range]::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: #1f2937; }
+    input[type=range]::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: #374151; }
     input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; margin-top: -5px; cursor: pointer; }
-    input[type=range]::-moz-range-track { height: 4px; border-radius: 2px; background: #1f2937; border: 0; }
+    input[type=range]::-moz-range-track { height: 4px; border-radius: 2px; background: #374151; border: 0; }
     input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; border: 0; cursor: pointer; }
     details summary::-webkit-details-marker { display: none; }
     details summary { list-style: none; }
-    .ind-table { width: 100%; border-collapse: collapse; }
+    .ind-table { width: 100%; border-collapse: separate; border-spacing: 0; }
     .ind-table th, .ind-table td { text-align: left; white-space: nowrap; }
-    .ind-table tbody tr { border-bottom: 1px solid rgba(55,65,81,0.3); }
+    .ind-table tbody tr { border-bottom: 1px solid rgba(75,85,99,0.15); transition: background 0.15s, transform 0.15s; }
     .ind-table tbody tr:last-child { border-bottom: none; }
-    .ind-table tbody tr:hover { background: rgba(31,41,55,0.3); }
+    .ind-table tbody tr:hover { background: rgba(96,165,250,0.04); }
+    /* Row stagger animation */
+    @keyframes rowFadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+    .ind-row-anim { animation: rowFadeIn 0.3s ease-out both; }
+    /* Card entrance */
+    @keyframes cardFadeIn { from { opacity: 0; transform: translateY(12px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+    .ind-card-anim { animation: cardFadeIn 0.35s ease-out both; }
+    /* Score ring */
+    .score-ring { position: relative; width: 44px; height: 44px; }
+    .score-ring svg { transform: rotate(-90deg); }
+    .score-ring-text { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+    /* Action buttons */
+    .ind-action { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; transition: all 0.15s; }
+    .ind-action:hover { background: rgba(255,255,255,0.06); }
+    .ind-action svg { width: 14px; height: 14px; }
+    /* View toggle pill */
+    .view-toggle { display: inline-flex; border-radius: 8px; padding: 2px; background: rgba(55,65,81,0.4); }
+    .view-toggle button { padding: 4px 12px; border-radius: 6px; font-size: 11px; transition: all 0.2s; color: #9ca3af; }
+    .view-toggle button.active { background: rgba(96,165,250,0.15); color: #93c5fd; }
+    /* Stat pill in cards */
+    .stat-pill { display: inline-flex; align-items: center; gap: 3px; padding: 3px 9px; border-radius: 6px; font-size: 11px; font-variant-numeric: tabular-nums; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); color: #d1d5db; }
     /* Custom scrollbar for market picker */
     #builder-market-picker::-webkit-scrollbar { width: 4px; }
     #builder-market-picker::-webkit-scrollbar-track { background: transparent; }
@@ -38,12 +58,26 @@
     /* Backtest threshold sliders */
     #bt-buy-slider::-webkit-slider-thumb { background: #22c55e; }
     #bt-sell-slider::-webkit-slider-thumb { background: #ef4444; }
+    /* Backtest metric tooltips */
+    .bt-tip { position: relative; cursor: help; }
+    .bt-tip::after {
+      content: attr(data-tip);
+      position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%);
+      padding: 6px 10px; border-radius: 6px; font-size: 11px; line-height: 1.4;
+      font-weight: 400; letter-spacing: 0; text-transform: none;
+      white-space: normal; width: max-content; max-width: 220px;
+      background: #1f2937; color: #d1d5db; border: 1px solid #374151;
+      box-shadow: 0 4px 12px rgba(0,0,0,.4);
+      pointer-events: none; opacity: 0; transition: opacity 0.15s;
+      z-index: 50; margin-bottom: 6px;
+    }
+    .bt-tip:hover::after { opacity: 1; }
   </style>
 </head>
-<body class="bg-gray-950 text-gray-200 min-h-screen">
+<body class="bg-[#0f1117] text-gray-100 min-h-screen">
 
   <!-- Top Navigation -->
-  <nav class="sticky top-0 z-50 bg-gray-950/95 backdrop-blur border-b border-gray-800/50">
+  <nav class="sticky top-0 z-50 bg-[#0f1117]/95 backdrop-blur border-b border-gray-700/40">
     <div class="max-w-7xl mx-auto px-4">
       <div class="flex items-center justify-between h-14">
         <div class="flex items-center gap-1">
@@ -51,6 +85,7 @@
           <a href="#indicators" data-nav="indicators" class="nav-link px-3 py-4 text-sm text-gray-500 border-b-2 border-transparent hover:text-gray-300">Indicators</a>
           <a href="#builder" data-nav="builder" class="nav-link px-3 py-4 text-sm text-gray-500 border-b-2 border-transparent hover:text-gray-300">Builder</a>
           <a href="#api" data-nav="api" class="nav-link px-3 py-4 text-sm text-gray-500 border-b-2 border-transparent hover:text-gray-300">API</a>
+          <a href="#docs" data-nav="docs" class="nav-link px-3 py-4 text-sm text-gray-500 border-b-2 border-transparent hover:text-gray-300">Docs</a>
         </div>
         <div class="flex items-center gap-3">
           <div id="nav-score" class="text-sm tabular-nums text-gray-500"></div>
@@ -60,34 +95,42 @@
     </div>
   </nav>
 
-  <div class="max-w-7xl mx-auto px-4 py-6">
+  <div class="max-w-7xl mx-auto px-6 py-8">
 
     <!-- INDICATORS PAGE -->
-    <div id="page-indicators" class="page space-y-5">
+    <div id="page-indicators" class="page space-y-6">
       <!-- Header + Toolbar -->
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-4">
-          <h1 class="text-lg font-medium text-gray-200">Indicators</h1>
-          <!-- View Toggle -->
-          <div class="flex rounded-md overflow-hidden border border-gray-800">
-            <button onclick="setIndicatorView('table')" id="ind-view-table" class="px-2.5 py-1 text-[11px] bg-gray-800 text-gray-200 transition-colors">Table</button>
-            <button onclick="setIndicatorView('card')" id="ind-view-card" class="px-2.5 py-1 text-[11px] text-gray-500 hover:text-gray-300 transition-colors">Cards</button>
+      <div class="flex items-center justify-between flex-wrap gap-3">
+        <div class="flex items-center gap-3">
+          <h1 class="text-xl font-semibold text-gray-100">Indicators</h1>
+          <div class="view-toggle">
+            <button onclick="setIndicatorView('table')" id="ind-view-table" class="active" title="Table view">
+              <svg class="w-3.5 h-3.5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+            </button>
+            <button onclick="setIndicatorView('card')" id="ind-view-card" title="Card view">
+              <svg class="w-3.5 h-3.5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1V5zm10 0a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4zm10 0a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z"/></svg>
+            </button>
           </div>
-          <select id="ind-sort" onchange="renderIndicatorsPage()" class="px-2 py-1 text-[11px] bg-gray-800/60 border border-gray-800 rounded-md text-gray-400 cursor-pointer focus:outline-none">
-            <option value="score">Score</option>
-            <option value="correlation">Correlation</option>
-            <option value="newest">Newest</option>
-            <option value="name">Name</option>
+          <select id="ind-sort" onchange="renderIndicatorsPage()" class="px-2.5 py-1.5 text-[11px] bg-gray-800/60 border border-gray-700/40 rounded-lg text-gray-400 cursor-pointer focus:outline-none focus:border-blue-500/40 transition-colors">
+            <option value="score">Sort: Score</option>
+            <option value="correlation">Sort: Correlation</option>
+            <option value="predictive">Sort: Predictive</option>
+            <option value="newest">Sort: Newest</option>
+            <option value="name">Sort: Name</option>
           </select>
+          <span id="ind-count" class="text-[11px] text-gray-600 tabular-nums hidden sm:inline"></span>
         </div>
-        <a href="#builder" class="px-4 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-500 transition-colors">+ New</a>
+        <a href="#builder" class="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-500 active:scale-[0.97] transition-all shadow-lg shadow-blue-600/20">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+          New Indicator
+        </a>
       </div>
 
       <!-- Unified indicator list -->
       <div id="indicators-sectors"></div>
 
       <!-- Comparison overlay chart -->
-      <div id="comparison-panel" class="hidden mt-6 bg-gray-900/50 rounded-2xl p-6 border border-gray-800/50">
+      <div id="comparison-panel" class="hidden mt-6 bg-gray-800/40 rounded-2xl p-6 border border-gray-700/40">
         <div class="flex items-center justify-between mb-3">
           <h3 class="text-sm font-medium text-gray-300">Indicator Comparison</h3>
           <button onclick="comparisonState.selected.clear(); updateComparisonUI();" class="text-xs text-gray-500 hover:text-gray-300">Clear</button>
@@ -96,15 +139,20 @@
       </div>
     </div>
 
+    <!-- INDICATOR DETAIL PAGE -->
+    <div id="page-indicator" class="page">
+      <div id="indicator-detail"></div>
+    </div>
+
     <!-- BUILDER PAGE -->
     <div id="page-builder" class="page">
 
       <!-- Top bar: Name + Save -->
       <div class="flex items-center gap-3 mb-5">
         <input type="text" id="builder-name" placeholder="Indicator name…"
-          class="flex-1 px-4 py-2 text-sm bg-gray-900/60 border border-gray-800 rounded-lg text-gray-200 placeholder-gray-600 focus:outline-none focus:border-blue-500/60">
+          class="flex-1 px-4 py-2 text-sm bg-gray-800/50 border border-gray-600/40 rounded-lg text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-500/60">
         <div class="relative">
-          <button onclick="toggleBuilderLoadMenu()" class="px-3 py-2 text-xs text-gray-400 bg-gray-900/60 border border-gray-800 rounded-lg hover:text-gray-200 hover:border-gray-700 transition-colors">
+          <button onclick="toggleBuilderLoadMenu()" class="px-3 py-2 text-xs text-gray-400 bg-gray-800/50 border border-gray-600/40 rounded-lg hover:text-gray-200 hover:border-gray-500 transition-colors">
             Load &#9662;
           </button>
           <div id="builder-load-menu" class="hidden absolute right-0 mt-1 w-56 bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-10 py-1"></div>
@@ -112,14 +160,41 @@
         <button onclick="saveBuilderIndicator()" class="px-5 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-500 transition-colors font-medium">Save</button>
       </div>
 
+      <!-- Bundle Pricing (collapsible) -->
+      <details id="builder-pricing-panel" class="mb-4">
+        <summary class="text-xs text-gray-400 cursor-pointer hover:text-gray-200 transition-colors select-none">Set API Pricing (SOL)</summary>
+        <div class="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <label class="block">
+            <span class="text-[11px] text-gray-500 block mb-1">10 calls</span>
+            <input type="number" id="bp-10" step="0.001" min="0" placeholder="SOL"
+              class="w-full px-2.5 py-1.5 text-xs bg-gray-800/50 border border-gray-600/40 rounded-lg text-gray-300 placeholder-gray-600 focus:outline-none focus:border-blue-500/50">
+          </label>
+          <label class="block">
+            <span class="text-[11px] text-gray-500 block mb-1">50 calls</span>
+            <input type="number" id="bp-50" step="0.001" min="0" placeholder="SOL"
+              class="w-full px-2.5 py-1.5 text-xs bg-gray-800/50 border border-gray-600/40 rounded-lg text-gray-300 placeholder-gray-600 focus:outline-none focus:border-blue-500/50">
+          </label>
+          <label class="block">
+            <span class="text-[11px] text-gray-500 block mb-1">100 calls</span>
+            <input type="number" id="bp-100" step="0.001" min="0" placeholder="SOL"
+              class="w-full px-2.5 py-1.5 text-xs bg-gray-800/50 border border-gray-600/40 rounded-lg text-gray-300 placeholder-gray-600 focus:outline-none focus:border-blue-500/50">
+          </label>
+          <label class="block">
+            <span class="text-[11px] text-gray-500 block mb-1">500 calls</span>
+            <input type="number" id="bp-500" step="0.001" min="0" placeholder="SOL"
+              class="w-full px-2.5 py-1.5 text-xs bg-gray-800/50 border border-gray-600/40 rounded-lg text-gray-300 placeholder-gray-600 focus:outline-none focus:border-blue-500/50">
+          </label>
+        </div>
+      </details>
+
       <!-- Two-panel: Left (chart + config), Right (market picker) -->
-      <div class="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-5">
+      <div class="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-6">
 
         <!-- Left column -->
-        <div class="space-y-4">
+        <div class="space-y-6">
 
           <!-- Chart -->
-          <div class="bg-gray-900/40 rounded-xl p-5 border border-gray-800/30">
+          <div class="bg-gray-800/40 rounded-xl p-6 border border-gray-700/40">
             <div class="flex items-center justify-between mb-3">
               <div id="builder-metrics" class="flex items-center gap-4"></div>
               <div class="flex gap-1">
@@ -139,7 +214,7 @@
           <span id="builder-chart-ref-label" class="hidden">BTC Price</span>
 
           <!-- Backtest Panel -->
-          <div id="backtest-panel" class="bg-gray-900/40 rounded-xl border border-gray-800/30 p-5">
+          <div id="backtest-panel" class="bg-gray-800/40 rounded-xl border border-gray-700/40 p-6">
             <div class="flex items-center justify-between mb-4">
               <h3 class="text-sm font-medium text-gray-300">Backtest</h3>
               <div class="flex items-center gap-3">
@@ -152,7 +227,7 @@
             <div class="flex flex-col gap-3 mb-4">
               <!-- Strategy selector -->
               <div class="flex items-center gap-2">
-                <span class="text-[10px] text-gray-500 uppercase tracking-wide shrink-0">Strategy</span>
+                <span class="text-[11px] text-gray-400 uppercase tracking-wide shrink-0">Strategy</span>
                 <div class="flex rounded-md overflow-hidden border border-gray-700/50">
                   <button id="bt-strat-momentum" onclick="setBtStrategy('momentum')"
                     class="px-2.5 py-1 text-[11px] bg-gray-800 text-gray-200 transition-colors">Momentum</button>
@@ -161,34 +236,34 @@
                   <button id="bt-strat-long_only" onclick="setBtStrategy('long_only')"
                     class="px-2.5 py-1 text-[11px] text-gray-500 hover:text-gray-300 transition-colors">Long Only</button>
                 </div>
-                <span id="bt-strat-hint" class="text-[10px] text-gray-600 ml-1 hidden sm:inline">Buy high conviction, sell on doubt</span>
+                <span id="bt-strat-hint" class="text-[11px] text-gray-500 ml-1 hidden sm:inline">Buy high conviction, sell on doubt</span>
               </div>
               <!-- Threshold sliders -->
               <div class="grid grid-cols-[1fr_1fr_auto] items-end gap-3">
                 <label class="block">
-                  <span id="bt-entry-label" class="text-[10px] text-gray-500 uppercase tracking-wide block mb-1">Enter above</span>
+                  <span id="bt-entry-label" class="text-[11px] text-gray-400 uppercase tracking-wide block mb-1">Enter above</span>
                   <div class="flex items-center gap-2">
                     <input type="range" id="bt-buy-slider" min="0" max="100" value="60" step="5" oninput="onBtSliderInput('buy',this.value)"
                       class="flex-1 h-1 rounded-full appearance-none cursor-pointer bg-gray-800 accent-green-500">
                     <input type="number" id="bt-buy" value="60" min="0" max="100" step="5" onchange="syncBtSlider('buy',this.value);renderBacktestPanel()"
-                      class="w-12 px-1.5 py-1 text-xs bg-gray-800 border border-gray-700 rounded text-gray-300 text-center tabular-nums">
+                      class="w-12 px-1.5 py-1 text-xs bg-gray-800/50 border border-gray-600/40 rounded text-gray-300 text-center tabular-nums">
                   </div>
                 </label>
                 <label class="block">
-                  <span id="bt-exit-label" class="text-[10px] text-gray-500 uppercase tracking-wide block mb-1">Exit below</span>
+                  <span id="bt-exit-label" class="text-[11px] text-gray-400 uppercase tracking-wide block mb-1">Exit below</span>
                   <div class="flex items-center gap-2">
                     <input type="range" id="bt-sell-slider" min="0" max="100" value="40" step="5" oninput="onBtSliderInput('sell',this.value)"
                       class="flex-1 h-1 rounded-full appearance-none cursor-pointer bg-gray-800 accent-red-500">
                     <input type="number" id="bt-sell" value="40" min="0" max="100" step="5" onchange="syncBtSlider('sell',this.value);renderBacktestPanel()"
-                      class="w-12 px-1.5 py-1 text-xs bg-gray-800 border border-gray-700 rounded text-gray-300 text-center tabular-nums">
+                      class="w-12 px-1.5 py-1 text-xs bg-gray-800/50 border border-gray-600/40 rounded text-gray-300 text-center tabular-nums">
                   </div>
                 </label>
                 <div class="flex items-center gap-2">
                   <label class="flex items-center gap-1">
-                    <span class="text-[10px] text-gray-500 uppercase tracking-wide">Cost</span>
+                    <span class="text-[11px] text-gray-400 uppercase tracking-wide">Cost</span>
                     <input type="number" id="bt-cost-bps" value="0" min="0" max="100" step="5"
-                      class="w-14 px-1.5 py-1 text-xs bg-gray-800 border border-gray-700 rounded text-gray-300 text-center tabular-nums">
-                    <span class="text-[10px] text-gray-500">bps</span>
+                      class="w-14 px-1.5 py-1 text-xs bg-gray-800/50 border border-gray-600/40 rounded text-gray-300 text-center tabular-nums">
+                    <span class="text-[11px] text-gray-400">bps</span>
                   </label>
                   <button onclick="renderBacktestPanel()" class="px-4 py-1.5 text-xs bg-blue-600/80 text-white rounded-lg hover:bg-blue-500 transition-colors">Run</button>
                   <button id="bt-trade-toggle" onclick="toggleTradeLog()" class="px-3 py-1.5 text-xs text-gray-400 border border-gray-700/50 rounded-lg hover:text-gray-200 transition-colors">Show Trades</button>
@@ -200,32 +275,32 @@
             <div id="bt-results" class="text-xs text-gray-500">Configure strategy and click Run</div>
 
             <!-- Equity curve -->
-            <div id="bt-equity-wrap" class="hidden mt-4 border-t border-gray-800/40 pt-4">
+            <div id="bt-equity-wrap" class="hidden mt-4 border-t border-gray-700/30 pt-4">
               <div style="height:120px"><canvas id="bt-equity-chart"></canvas></div>
             </div>
 
             <!-- Trade log -->
-            <div id="bt-trade-log" class="hidden mt-4 border-t border-gray-800/40 pt-4 max-h-80 overflow-y-auto"></div>
+            <div id="bt-trade-log" class="hidden mt-4 border-t border-gray-700/30 pt-4 max-h-80 overflow-y-auto"></div>
           </div>
         </div>
 
         <!-- Right: Market Picker -->
-        <div class="flex flex-col bg-gray-900/40 rounded-xl border border-gray-800/30 overflow-hidden" style="max-height: calc(100vh - 120px)">
+        <div class="flex flex-col bg-gray-800/40 rounded-xl border border-gray-700/40 overflow-hidden" style="max-height: calc(100vh - 120px)">
 
           <!-- Selected basket summary -->
           <div id="builder-basket" class="shrink-0 px-3 pt-3 pb-2"></div>
 
           <!-- Search + filters -->
-          <div class="shrink-0 px-3 pb-3 space-y-2 border-b border-gray-800/40">
+          <div class="shrink-0 px-3 pb-3 space-y-2 border-b border-gray-700/30">
             <div class="relative">
               <svg class="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
               <input type="text" id="builder-market-search" placeholder="Search markets…"
                 oninput="onBuilderMarketSearch(this.value)"
-                class="w-full pl-8 pr-3 py-1.5 text-xs bg-gray-800/60 border border-gray-700/50 rounded-md text-gray-200 placeholder-gray-600 focus:outline-none focus:border-blue-500/50">
+                class="w-full pl-8 pr-3 py-1.5 text-xs bg-gray-800/50 border border-gray-600/40 rounded-md text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-500/50">
             </div>
             <div class="flex items-center gap-2 text-[10px] flex-wrap">
               <select id="builder-market-sort" onchange="onBuilderMarketSort(this.value)"
-                class="bg-gray-800/60 border border-gray-700/50 text-gray-400 rounded px-1.5 py-1 text-[10px] focus:outline-none cursor-pointer">
+                class="bg-gray-800/50 border border-gray-600/40 text-gray-400 rounded px-1.5 py-1 text-[10px] focus:outline-none cursor-pointer">
                 <option value="volume">Volume</option>
                 <option value="resolution">Resolution</option>
                 <option value="prob_high">Prob ↓</option>
@@ -242,7 +317,7 @@
                   class="rounded bg-gray-700 border-gray-600 w-2.5 h-2.5 cursor-pointer">
                 Resolved
               </label>
-              <span id="builder-market-count" class="text-gray-600 ml-auto tabular-nums"></span>
+              <span id="builder-market-count" class="text-gray-500 ml-auto tabular-nums"></span>
             </div>
           </div>
 
@@ -261,8 +336,13 @@
       <div id="api-panel-content"></div>
     </div>
 
+    <!-- DOCS PAGE -->
+    <div id="page-docs" class="page space-y-6">
+      <div id="docs-content"></div>
+    </div>
+
     <!-- Footer -->
-    <footer class="text-center text-xs text-gray-600 py-6 mt-8">
+    <footer class="text-center text-xs text-gray-500 py-6 mt-8">
       Data from Polymarket public APIs &middot; Scores are informational only, not financial advice.
     </footer>
 
@@ -270,15 +350,15 @@
 
   <!-- Alert Modal -->
   <div id="alert-modal" class="hidden fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
-    <div class="bg-gray-900 rounded-2xl border border-gray-700 w-full max-w-sm mx-4 p-6 relative">
+    <div class="bg-[#1a1d27] rounded-2xl border border-gray-600/50 w-full max-w-sm mx-4 p-6 relative">
       <button onclick="closeAlertModal()" class="absolute top-4 right-4 text-gray-500 hover:text-gray-300 text-xl">&times;</button>
-      <h3 class="text-sm font-medium text-gray-200 mb-1">Set Alert</h3>
+      <h3 class="text-sm font-semibold text-gray-100 mb-1">Set Alert</h3>
       <p id="alert-indicator-name" class="text-xs text-gray-500 mb-4"></p>
       <input type="hidden" id="alert-indicator-id">
 
       <label class="block text-xs text-gray-400 mb-1">Condition</label>
       <select id="alert-condition" onchange="toggleAlertThreshold()"
-        class="w-full px-3 py-2 text-xs bg-gray-800 border border-gray-700 rounded-lg text-gray-300 mb-3">
+        class="w-full px-3 py-2 text-xs bg-gray-800/50 border border-gray-600/40 rounded-lg text-gray-300 mb-3">
         <option value="crosses_above">Crosses above</option>
         <option value="crosses_below">Crosses below</option>
         <option value="daily_summary">Daily summary</option>
@@ -287,12 +367,12 @@
       <div id="alert-threshold-wrap">
         <label class="block text-xs text-gray-400 mb-1">Threshold (0-100)</label>
         <input type="number" id="alert-threshold" value="60" min="0" max="100" step="5"
-          class="w-full px-3 py-2 text-xs bg-gray-800 border border-gray-700 rounded-lg text-gray-300 mb-3">
+          class="w-full px-3 py-2 text-xs bg-gray-800/50 border border-gray-600/40 rounded-lg text-gray-300 mb-3">
       </div>
 
       <label class="block text-xs text-gray-400 mb-1">Channel</label>
       <select id="alert-channel"
-        class="w-full px-3 py-2 text-xs bg-gray-800 border border-gray-700 rounded-lg text-gray-300 mb-3">
+        class="w-full px-3 py-2 text-xs bg-gray-800/50 border border-gray-600/40 rounded-lg text-gray-300 mb-3">
         <option value="email">Email</option>
         <option value="webhook">Webhook URL</option>
         <option value="discord">Discord Webhook</option>
@@ -300,7 +380,7 @@
 
       <label class="block text-xs text-gray-400 mb-1">Destination</label>
       <input type="text" id="alert-destination" placeholder="email@example.com or https://..."
-        class="w-full px-3 py-2 text-xs bg-gray-800 border border-gray-700 rounded-lg text-gray-300 mb-4">
+        class="w-full px-3 py-2 text-xs bg-gray-800/50 border border-gray-600/40 rounded-lg text-gray-300 mb-4">
 
       <div id="alert-error" class="text-red-400 text-xs mb-2"></div>
       <button onclick="createAlert()" class="w-full px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-500 transition-colors">Create Alert</button>
@@ -309,7 +389,7 @@
 
   <!-- Auth Modal -->
   <div id="auth-modal" class="hidden fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
-    <div class="bg-gray-900 rounded-2xl border border-gray-700 w-full max-w-md mx-4 p-6 relative">
+    <div class="bg-[#1a1d27] rounded-2xl border border-gray-600/50 w-full max-w-md mx-4 p-6 relative">
       <button onclick="closeAuthModal()" class="absolute top-4 right-4 text-gray-500 hover:text-gray-300 text-xl">&times;</button>
 
       <!-- Wallet Connect -->
@@ -335,20 +415,20 @@
       <!-- Login Form -->
       <form id="auth-form-login" onsubmit="handleLoginSubmit(event)">
         <input id="login-email" type="email" placeholder="Email" required
-          class="w-full px-4 py-2.5 mb-3 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500">
+          class="w-full px-4 py-2.5 mb-3 bg-gray-800/50 border border-gray-600/40 rounded-lg text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-500">
         <input id="login-password" type="password" placeholder="Password" required
-          class="w-full px-4 py-2.5 mb-4 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500">
+          class="w-full px-4 py-2.5 mb-4 bg-gray-800/50 border border-gray-600/40 rounded-lg text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-500">
         <button type="submit" class="w-full px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-500 transition-colors">Sign In</button>
       </form>
 
       <!-- Register Form -->
       <form id="auth-form-register" class="hidden" onsubmit="handleRegisterSubmit(event)">
         <input id="register-name" type="text" placeholder="Display Name"
-          class="w-full px-4 py-2.5 mb-3 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500">
+          class="w-full px-4 py-2.5 mb-3 bg-gray-800/50 border border-gray-600/40 rounded-lg text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-500">
         <input id="register-email" type="email" placeholder="Email" required
-          class="w-full px-4 py-2.5 mb-3 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500">
+          class="w-full px-4 py-2.5 mb-3 bg-gray-800/50 border border-gray-600/40 rounded-lg text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-500">
         <input id="register-password" type="password" placeholder="Password (8+ chars)" required minlength="8"
-          class="w-full px-4 py-2.5 mb-4 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500">
+          class="w-full px-4 py-2.5 mb-4 bg-gray-800/50 border border-gray-600/40 rounded-lg text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-500">
         <button type="submit" class="w-full px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-500 transition-colors">Create Account</button>
       </form>
     </div>
@@ -359,6 +439,7 @@
   <script src="js/app.js"></script>
   <script src="js/sandbox.js"></script>
   <script src="js/api-panel.js"></script>
+  <script src="js/docs.js"></script>
 
 </body>
 </html>

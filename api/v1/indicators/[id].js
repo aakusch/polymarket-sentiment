@@ -76,6 +76,7 @@ module.exports = async function handler(req, res) {
     asset: result.config.asset,
     score: result.latestScore,
     label: result.latestScore != null ? (result.latestScore >= 80 ? 'Strongly Bullish' : result.latestScore >= 60 ? 'Bullish' : result.latestScore >= 40 ? 'Neutral' : result.latestScore >= 20 ? 'Bearish' : 'Strongly Bearish') : null,
+    predictive: result.predictive || null,
     breakdown: result.breakdown,
     config: result.config,
     timeseries: {

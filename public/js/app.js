@@ -149,20 +149,27 @@ function handleRoute() {
   if (target) target.classList.add('active');
   else document.getElementById('page-indicators')?.classList.add('active');
 
-  // Update nav
+  // Update nav — indicator detail is a child of indicators
+  const navPage = page === 'indicator' ? 'indicators' : page;
   document.querySelectorAll('[data-nav]').forEach(a => {
-    a.classList.toggle('active', a.dataset.nav === page);
+    a.classList.toggle('active', a.dataset.nav === navPage);
   });
 
   switch (page) {
     case 'indicators':
       renderIndicatorsPage();
       break;
+    case 'indicator':
+      if (typeof renderIndicatorDetail === 'function') renderIndicatorDetail();
+      break;
     case 'builder':
       renderBuilderPage();
       break;
     case 'api':
       if (typeof renderApiPanel === 'function') renderApiPanel();
+      break;
+    case 'docs':
+      if (typeof renderDocsPage === 'function') renderDocsPage();
       break;
     default:
       document.getElementById('page-indicators')?.classList.add('active');

@@ -120,7 +120,9 @@ async function handleTimeseries(req, res, id) {
     res.json({
       id: indicator.id, name: indicator.name, asset: result.config.asset,
       timeseries: { dates, scores, prices, fgValues, points: dates.length },
-      latestScore: result.latestScore, credits_remaining: auth.creditsRemaining,
+      latestScore: result.latestScore,
+      predictive: result.predictive || null,
+      credits_remaining: auth.creditsRemaining,
       computed_at: new Date().toISOString(),
     });
   } catch (err) {

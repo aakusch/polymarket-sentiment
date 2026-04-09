@@ -99,32 +99,7 @@ function renderExploreGrid() {
   el.innerHTML = html;
 }
 
-async function forkIndicator(id) {
-  try {
-    const res = await fetch('/api/indicators/' + id);
-    if (!res.ok) throw new Error('Failed to load indicator');
-    const ind = await res.json();
-
-    // Load into builder state as new unsaved indicator
-    builderState.sector = ind.sector || 'crypto';
-    builderState.asset = ind.asset || 'BTC';
-    builderState.fgEnabled = ind.fg_enabled ?? ind.fgEnabled ?? false;
-    builderState.fgWeight = ind.fg_weight ?? ind.fgWeight ?? 30;
-    builderState.editingId = null;
-    builderState.initialized = false;
-
-    if (ind.markets) {
-      builderState.selectedMarkets = { ...ind.markets };
-    } else if (ind.weights) {
-      // Will be migrated in renderBuilderPage
-      builderState.selectedMarkets = {};
-    }
-
-    location.hash = '#builder?sector=' + builderState.sector;
-  } catch (err) {
-    console.error('Fork failed:', err);
-  }
-}
+// forkIndicator() is now defined in sandbox.js as the global version
 
 function sortExploreBy(sort) {
   exploreState.sort = sort;

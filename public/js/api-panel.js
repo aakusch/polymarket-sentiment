@@ -58,7 +58,16 @@ async function renderApiPanel() {
     }
     html += `</section>`;
 
-    // Indicators with API info
+    // Credits section
+    html += `
+      <section class="mb-8">
+        <h2 class="text-lg font-medium text-gray-200 mb-4">Credits</h2>
+        <div class="bg-gray-900/50 rounded-xl p-6 border border-gray-800/50">
+          <div id="credit-balance" class="text-sm text-gray-400">Loading balance...</div>
+        </div>
+      </section>`;
+
+    // Indicators with bundle pricing
     html += `
       <section class="mb-8">
         <h2 class="text-lg font-medium text-gray-200 mb-4">Your Indicators</h2>`;
@@ -68,12 +77,17 @@ async function renderApiPanel() {
     } else {
       html += `<div class="space-y-3">`;
       for (const ind of indicators) {
-        const price = ind.pricePer100 ? `${ind.pricePer100} ${ind.priceToken || 'SOL'} / 100 calls` : 'Free';
+        const bp = ind.bundlePrices || {};
+        const hasPricing = bp[10] || bp[50] || bp[100] || bp[500];
+        const pricingHtml = hasPricing
+          ? `<div class="flex gap-2 mt-1">${[10, 50, 100, 500].map(t => bp[t] ? `<span class="text-[10px] px-1.5 py-0.5 bg-gray-800/60 rounded text-gray-400">${t}: ${bp[t]} SOL</span>` : '').filter(Boolean).join('')}</div>`
+          : '<span class="text-gray-500">Free</span>';
+
         html += `
           <div class="bg-gray-900/50 rounded-xl p-4 border border-gray-800/50">
             <div class="flex items-center justify-between mb-2">
               <span class="text-sm font-medium text-gray-200">${ind.name}</span>
-              <span class="text-xs text-gray-500">${ind.asset} &middot; ${ind.isPublic ? 'Public' : 'Private'}</span>
+              <span class="text-xs text-gray-500">${ind.asset || 'BTC'} &middot; ${ind.isPublic ? 'Public' : 'Private'}</span>
             </div>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
               <div>
@@ -84,10 +98,13 @@ async function renderApiPanel() {
                 <span class="text-gray-500">API endpoint:</span>
                 <code class="text-blue-400 ml-1">/api/v1/indicators/${ind.id}</code>
               </div>
-              <div>
+              <div class="sm:col-span-2">
                 <span class="text-gray-500">Pricing:</span>
-                <span class="text-gray-300 ml-1">${price}</span>
+                <span class="ml-1">${pricingHtml}</span>
               </div>
+            </div>
+            <div class="mt-2">
+              <button onclick="initCreditPurchase('${ind.id}','${ind.name.replace(/'/g, "\\'")}')" class="px-3 py-1 text-xs bg-blue-600/80 text-white rounded hover:bg-blue-500 transition-colors">Buy Credits</button>
             </div>
           </div>`;
       }
@@ -130,15 +147,6 @@ async function renderApiPanel() {
               <span class="text-xs text-gray-500">1 credit</span>
             </div>
             <p class="text-xs text-gray-400 mb-3">Get current score and label for an indicator. Cheapest call.</p>
-            <details class="text-xs">
-              <summary class="text-gray-500 cursor-pointer hover:text-gray-300">Examples</summary>
-              <div class="mt-2 space-y-2">
-                <div class="bg-gray-800 rounded p-3">
-                  <div class="text-gray-500 mb-1">Python</div>
-                  <code class="text-green-400 break-all">import requests<br>r = requests.get("https://pmsi.app/api/v2/indicators/abc123/latest", headers={"X-API-Key": "your_key"})<br>print(r.json()["score"], r.json()["label"])</code>
-                </div>
-              </div>
-            </details>
           </div>
 
           <div class="bg-gray-900/50 rounded-xl p-4 border border-gray-800/50">
@@ -147,42 +155,7 @@ async function renderApiPanel() {
               <code class="text-sm text-blue-400">/api/v2/indicators/{id}/timeseries</code>
               <span class="text-xs text-gray-500">1 credit</span>
             </div>
-            <p class="text-xs text-gray-400 mb-3">Get full timeseries with date-range filtering.</p>
-            <details class="text-xs">
-              <summary class="text-gray-500 cursor-pointer hover:text-gray-300">Query params & examples</summary>
-              <div class="mt-2 space-y-2 text-gray-400">
-                <div><code class="text-gray-300">start</code> — start date (YYYY-MM-DD)</div>
-                <div><code class="text-gray-300">end</code> — end date (YYYY-MM-DD)</div>
-                <div class="mt-3 bg-gray-800 rounded p-3">
-                  <div class="text-gray-500 mb-1">JavaScript</div>
-                  <code class="text-green-400 break-all">const res = await fetch("https://pmsi.app/api/v2/indicators/abc123/timeseries?start=2026-01-01&end=2026-04-01", { headers: { "X-API-Key": "your_key" } });<br>const { timeseries } = await res.json();</code>
-                </div>
-              </div>
-            </details>
-          </div>
-        </div>
-      </section>`;
-
-    // Token & Credits section
-    html += `
-      <section class="mb-8">
-        <h2 class="text-lg font-medium text-gray-200 mb-4">PMSI Token Credits</h2>
-        <div id="token-credits-section" class="space-y-4">
-          <div class="bg-gradient-to-br from-purple-900/30 to-blue-900/30 rounded-xl p-6 border border-purple-700/30">
-            <div class="flex items-center gap-3 mb-4">
-              <div class="w-10 h-10 rounded-full bg-purple-600/30 flex items-center justify-center text-purple-400 font-bold text-sm">P</div>
-              <div>
-                <div class="text-sm font-medium text-gray-200">PMSI Token</div>
-                <div class="text-xs text-gray-500">Hold tokens for daily API credit allowance</div>
-              </div>
-            </div>
-            <div id="token-info-body" class="text-sm text-gray-400">Loading token info...</div>
-          </div>
-          <div id="credit-balance-card" class="bg-gray-900/50 rounded-xl p-6 border border-gray-800/50">
-            <div id="credit-balance" class="text-sm text-gray-400">Loading balance...</div>
-          </div>
-          <div class="flex gap-3">
-            <button onclick="initCreditPurchase()" class="px-4 py-2 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-500 transition-colors">Buy Credits (SOL)</button>
+            <p class="text-xs text-gray-400 mb-3">Get full timeseries with date-range filtering. Includes predictive score.</p>
           </div>
         </div>
       </section>`;
@@ -228,126 +201,97 @@ async function revokeApiKey(id) {
 }
 
 async function loadCreditBalance() {
-  // Load token info (public, no auth required)
-  try {
-    const infoRes = await fetch('/api/credits/token-info');
-    if (infoRes.ok) {
-      const info = await infoRes.json();
-      const el = document.getElementById('token-info-body');
-      if (el) {
-        if (info.enabled) {
-          el.innerHTML = `
-            <div class="space-y-3">
-              <div class="flex items-center gap-2">
-                <span class="text-gray-500 text-xs">Contract:</span>
-                <code class="text-xs text-purple-300 bg-gray-800/60 px-2 py-0.5 rounded font-mono">${info.mint}</code>
-                <button onclick="navigator.clipboard.writeText('${info.mint}');this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)" class="text-xs text-gray-500 hover:text-purple-400 transition-colors">Copy</button>
-              </div>
-              <div class="text-xs text-gray-400">${info.pricing}</div>
-              <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-2">
-                ${info.tiers.map(t => `
-                  <div class="bg-gray-800/40 rounded-lg p-2 text-center">
-                    <div class="text-xs font-medium text-gray-300">${t.name}</div>
-                    <div class="text-xs text-purple-400">${t.tokens} PMSI</div>
-                    <div class="text-xs text-gray-500">${t.dailyCalls.toLocaleString()}/day</div>
-                  </div>
-                `).join('')}
-              </div>
-            </div>`;
-        } else {
-          el.innerHTML = `
-            <div class="text-xs text-gray-500">
-              Token not deployed yet. Credits can be purchased with SOL.
-              <br>Once live, hold PMSI tokens for ${info.creditsPerToken} API calls/day per token.
-            </div>`;
-        }
-      }
-    }
-  } catch { /* ignore */ }
-
-  // Load balance (requires auth)
   try {
     const res = await fetch('/api/credits/balance', { headers: authHeaders() });
     if (res.ok) {
       const data = await res.json();
       const el = document.getElementById('credit-balance');
       if (el) {
-        let html = `<div class="space-y-3">`;
-
-        // Total available
-        html += `
+        el.innerHTML = `
           <div class="flex items-center justify-between">
-            <span class="text-gray-400">Total Available</span>
-            <span class="text-xl font-semibold text-gray-100">${data.totalAvailable.toLocaleString()} credits</span>
-          </div>
-          <div class="w-full h-px bg-gray-700/50"></div>`;
-
-        // DB credits
-        html += `
-          <div class="flex items-center justify-between text-xs">
-            <span class="text-gray-500">Purchased credits</span>
-            <span class="text-gray-300">${data.dbCredits.toLocaleString()}</span>
+            <span class="text-gray-400">Available Credits</span>
+            <span class="text-xl font-semibold text-gray-100">${data.credits.toLocaleString()}</span>
           </div>`;
-
-        // Token credits
-        if (data.token.enabled) {
-          html += `
-            <div class="flex items-center justify-between text-xs">
-              <span class="text-gray-500">PMSI token balance</span>
-              <span class="text-purple-400">${data.tokenBalance.toLocaleString()} PMSI</span>
-            </div>
-            <div class="flex items-center justify-between text-xs">
-              <span class="text-gray-500">Token daily allowance</span>
-              <span class="text-gray-300">${data.tokenDailyAllowance.toLocaleString()}/day</span>
-            </div>
-            <div class="flex items-center justify-between text-xs">
-              <span class="text-gray-500">Token calls used today</span>
-              <span class="text-gray-300">${data.tokenCallsUsedToday}/${data.tokenDailyAllowance.toLocaleString()}</span>
-            </div>
-            <div class="flex items-center justify-between text-xs">
-              <span class="text-gray-500">Token credits remaining</span>
-              <span class="text-green-400">${data.tokenCreditsRemaining.toLocaleString()}</span>
-            </div>`;
-        } else if (data.tokenBalance === 0 && !data.token.enabled) {
-          html += `
-            <div class="text-xs text-gray-600 mt-1">Token credits available once PMSI token is deployed.</div>`;
-        }
-
-        html += `</div>`;
-        el.innerHTML = html;
       }
     }
   } catch { /* ignore */ }
 }
 
-async function initCreditPurchase() {
+async function initCreditPurchase(indicatorId, indicatorName) {
   if (!window.solana?.isPhantom) {
     alert('Phantom wallet required for credit purchases');
     return;
   }
 
-  const indicatorId = prompt('Indicator ID to buy credits for:');
-  if (!indicatorId) return;
+  if (!indicatorId) {
+    indicatorId = prompt('Indicator ID to buy credits for:');
+    if (!indicatorId) return;
+  }
 
-  const credits = parseInt(prompt('Number of credits (100 minimum):', '100'));
-  if (!credits || credits < 100) return;
+  // Fetch available bundles
+  let bundles;
+  try {
+    const res = await fetch(`/api/credits/bundles?indicatorId=${indicatorId}`);
+    if (!res.ok) {
+      const err = await res.json();
+      alert(err.error || 'Failed to fetch bundles');
+      return;
+    }
+    const data = await res.json();
+    bundles = data.bundles;
+  } catch (err) {
+    alert('Failed to fetch bundle pricing: ' + err.message);
+    return;
+  }
+
+  // Build bundle selection prompt
+  const available = bundles.filter(b => b.price != null);
+  if (available.length === 0) {
+    // All free — just pick a tier
+    const credits = parseInt(prompt('This indicator is free. How many credits? (10, 50, 100, 500):', '100'));
+    if (![10, 50, 100, 500].includes(credits)) return;
+
+    const keysRes = await fetch('/api/keys', { headers: authHeaders() });
+    const keys = await keysRes.json();
+    const activeKeys = keys.filter(k => !k.revoked);
+    if (activeKeys.length === 0) { alert('Create an API key first'); return; }
+
+    const purchaseRes = await fetch('/api/credits/purchase', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ indicatorId, bundle: credits, apiKeyId: activeKeys[0].id }),
+    });
+    if (purchaseRes.ok) {
+      alert(`${credits} free credits added!`);
+      renderApiPanel();
+    }
+    return;
+  }
+
+  const options = available.map(b => `${b.calls} calls = ${b.price} SOL`).join('\n');
+  const choice = prompt(`Select a bundle for ${indicatorName || indicatorId}:\n\n${options}\n\nEnter number of calls (${available.map(b => b.calls).join(', ')}):`);
+  const bundle = parseInt(choice);
+  if (![10, 50, 100, 500].includes(bundle)) return;
+
+  const selected = bundles.find(b => b.calls === bundle);
+  if (!selected || selected.price == null) {
+    alert('That bundle tier is not available');
+    return;
+  }
 
   // Get API keys
   const keysRes = await fetch('/api/keys', { headers: authHeaders() });
   const keys = await keysRes.json();
   const activeKeys = keys.filter(k => !k.revoked);
-  if (activeKeys.length === 0) {
-    alert('Create an API key first');
-    return;
-  }
+  if (activeKeys.length === 0) { alert('Create an API key first'); return; }
   const apiKeyId = activeKeys[0].id;
 
   try {
-    // Get payment params from server
+    // Get payment params
     const purchaseRes = await fetch('/api/credits/purchase', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ indicatorId, credits, apiKeyId }),
+      body: JSON.stringify({ indicatorId, bundle, apiKeyId }),
     });
 
     if (!purchaseRes.ok) {
@@ -396,7 +340,7 @@ async function initCreditPurchase() {
     });
 
     if (verifyRes.ok) {
-      alert(`Success! ${credits} credits added.`);
+      alert(`Success! ${bundle} credits added.`);
       renderApiPanel();
     } else {
       const err = await verifyRes.json();
