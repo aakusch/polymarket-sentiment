@@ -1,10 +1,10 @@
 const bcrypt = require('bcryptjs');
 const nacl = require('tweetnacl');
 const bs58 = require('bs58').default || require('bs58');
-const { getDb } = require('../_lib/db');
+const { getDb, isMissingDatabaseUrlError, withDatabaseConfigError } = require('../_lib/db');
 const { signToken, authenticate } = require('../_lib/auth');
 
-module.exports = async function handler(req, res) {
+module.exports = withDatabaseConfigError(async function handler(req, res) {
   const { action } = req.query;
 
   switch (action) {
@@ -14,7 +14,7 @@ module.exports = async function handler(req, res) {
     case 'wallet': return handleWallet(req, res);
     default: return res.status(404).json({ error: 'Not found' });
   }
-};
+});
 
 async function handleLogin(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -108,6 +108,7 @@ async function handleWallet(req, res) {
     const token = signToken(user.id, user.wallet_address);
     res.json({ token, user: { id: user.id, wallet: user.wallet_address, displayName: user.display_name, email: user.email } });
   } catch (err) {
+    if (isMissingDatabaseUrlError(err)) throw err;
     console.error('Wallet auth DB error:', err);
     res.status(500).json({ error: 'Server error during authentication' });
   }

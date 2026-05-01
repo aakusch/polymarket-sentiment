@@ -1,9 +1,9 @@
-const { getDb } = require('../_lib/db');
+const { getDb, withDatabaseConfigError } = require('../_lib/db');
 const { authenticate } = require('../_lib/auth');
 const { computeIndicator } = require('../_lib/compute');
-const { ensureBundlePricing, ensureForkColumns } = require('../_lib/migrations');
+const { ensureBundlePricing, ensureForkColumns, ensureEngagement } = require('../_lib/migrations');
 
-module.exports = async function handler(req, res) {
+module.exports = withDatabaseConfigError(async function handler(req, res) {
   const raw = req.query.params ?? req.query['[...params]'];
   const params = Array.isArray(raw) ? raw : raw ? [raw] : [];
 
@@ -15,6 +15,10 @@ module.exports = async function handler(req, res) {
   if (params[0] === 'migrate') return handleMigrate(req, res);
   // GET /api/indicators/:id/page — HTML page (also via ?action=page rewrite)
   if (params.length === 2 && params[1] === 'page') return handlePage(req, res, params[0]);
+  // POST /api/indicators/:id/view
+  if (params.length === 2 && params[1] === 'view') return handleView(req, res, params[0]);
+  // GET/POST /api/indicators/:id/comments
+  if (params.length === 2 && params[1] === 'comments') return handleComments(req, res, params[0]);
   // GET/PUT/DELETE /api/indicators/:id
   if (params.length === 1) {
     if (req.query.action === 'page') return handlePage(req, res, params[0]);
@@ -22,7 +26,7 @@ module.exports = async function handler(req, res) {
   }
 
   return res.status(404).json({ error: 'Not found' });
-};
+});
 
 async function handleIndex(req, res) {
   const auth = authenticate(req);
@@ -30,20 +34,23 @@ async function handleIndex(req, res) {
   const sql = getDb();
   await ensureBundlePricing();
   await ensureForkColumns();
+  await ensureEngagement();
 
   if (req.method === 'GET') {
     const rows = await sql`
-      SELECT id, name, sector, asset, weights, fg_enabled, fg_weight,
+      SELECT id, name, sector, asset, markets, weights, fg_enabled, fg_weight,
              include_other, is_public, price_bundle_10, price_bundle_50, price_bundle_100, price_bundle_500,
-             published_at, forked_from, fork_count,
+             view_count, comment_count, published_at, forked_from, fork_count,
              created_at, updated_at
       FROM indicators WHERE user_id = ${auth.id} ORDER BY created_at DESC
     `;
     return res.json(rows.map(r => {
       const w = r.weights || {};
+      const markets = w.markets || r.markets;
       return {
         id: r.id, name: r.name, sector: r.sector, asset: r.asset,
-        ...(w.markets ? { markets: w.markets } : { weights: w }),
+        ...(markets ? { markets } : { weights: w }),
+        referenceAsset: w.referenceAsset || null,
         fgEnabled: r.fg_enabled, fgWeight: r.fg_weight, includeOther: r.include_other,
         isPublic: r.is_public,
         bundlePrices: {
@@ -52,6 +59,7 @@ async function handleIndex(req, res) {
           100: r.price_bundle_100 ? parseFloat(r.price_bundle_100) : null,
           500: r.price_bundle_500 ? parseFloat(r.price_bundle_500) : null,
         },
+        viewCount: r.view_count || 0, commentCount: r.comment_count || 0,
         publishedAt: r.published_at, forkedFrom: r.forked_from, forkCount: r.fork_count || 0,
         createdAt: r.created_at, updatedAt: r.updated_at, _fromServer: true,
       };
@@ -59,16 +67,28 @@ async function handleIndex(req, res) {
   }
 
   if (req.method === 'POST') {
-    const { id, name, sector, asset, weights, markets, fgEnabled, fgWeight, includeOther, isPublic, bundlePrices, forkedFrom } = req.body || {};
+    const { id, name, sector, asset, weights, markets, referenceAsset, fgEnabled, fgWeight, includeOther, isPublic, bundlePrices, forkedFrom } = req.body || {};
     if (!name) return res.status(400).json({ error: 'Name required' });
-    const weightsPayload = markets ? { markets } : (weights || {});
+    const weightsPayload = markets
+      ? { markets, referenceAsset: referenceAsset || null }
+      : { ...(weights || {}), referenceAsset: referenceAsset || weights?.referenceAsset || null };
 
     // Duplicate detection: normalize config and compare against user's existing indicators
     const userRows = await sql`SELECT id, weights, fg_enabled, fg_weight, sector, asset FROM indicators WHERE user_id = ${auth.id}`;
     const normalizeConfig = (m, fg, fgW, s, a) => {
       const mk = m?.markets || m || {};
-      const sorted = Object.keys(mk).sort().reduce((o, k) => { o[k] = mk[k]; return o; }, {});
-      return JSON.stringify({ markets: sorted, fg: !!fg, fgW: fgW || 30, sector: s || 'crypto', asset: a || 'BTC' });
+      const sorted = Object.keys(mk)
+        .filter(k => !['referenceAsset'].includes(k))
+        .sort()
+        .reduce((o, k) => { o[k] = mk[k]; return o; }, {});
+      return JSON.stringify({
+        markets: sorted,
+        referenceAsset: m?.referenceAsset || null,
+        fg: !!fg,
+        fgW: fgW || 30,
+        sector: s || 'crypto',
+        asset: a || 'BTC',
+      });
     };
     const newNorm = normalizeConfig(weightsPayload, fgEnabled, fgWeight, sector, asset);
     for (const row of userRows) {
@@ -114,6 +134,7 @@ async function handleById(req, res, id) {
   const sql = getDb();
   if (req.method === 'GET') {
     await ensureForkColumns();
+    await ensureEngagement();
     const rows = await sql`
       SELECT i.*, u.display_name as creator_name, u.wallet_address as creator_wallet
       FROM indicators i JOIN users u ON i.user_id = u.id WHERE i.id = ${id}
@@ -123,9 +144,11 @@ async function handleById(req, res, id) {
     const auth = authenticate(req);
     if (!r.is_public && !(auth && auth.id === r.user_id)) return res.status(404).json({ error: 'Not found' });
     const w = r.weights || {};
+    const markets = w.markets || r.markets;
     return res.json({
       id: r.id, name: r.name, sector: r.sector, asset: r.asset,
-      ...(w.markets ? { markets: w.markets } : { weights: w }),
+      ...(markets ? { markets } : { weights: w }),
+      referenceAsset: w.referenceAsset || null,
       fgEnabled: r.fg_enabled, fgWeight: r.fg_weight, includeOther: r.include_other,
       isPublic: r.is_public,
       bundlePrices: {
@@ -134,6 +157,7 @@ async function handleById(req, res, id) {
         100: r.price_bundle_100 ? parseFloat(r.price_bundle_100) : null,
         500: r.price_bundle_500 ? parseFloat(r.price_bundle_500) : null,
       },
+      viewCount: r.view_count || 0, commentCount: r.comment_count || 0,
       creatorName: r.creator_name, creatorWallet: r.creator_wallet,
       publishedAt: r.published_at, forkedFrom: r.forked_from, forkCount: r.fork_count || 0,
       createdAt: r.created_at, _fromServer: true,
@@ -148,8 +172,10 @@ async function handleById(req, res, id) {
     const existing = await sql`SELECT user_id, is_public, published_at FROM indicators WHERE id = ${id}`;
     if (existing.length === 0) return res.status(404).json({ error: 'Not found' });
     if (existing[0].user_id !== auth.id) return res.status(403).json({ error: 'Forbidden' });
-    const { name, sector, asset, weights, markets, fgEnabled, fgWeight, includeOther, isPublic, bundlePrices } = req.body || {};
-    const weightsPayload = markets ? JSON.stringify({ markets }) : (weights ? JSON.stringify(weights) : null);
+    const { name, sector, asset, weights, markets, referenceAsset, fgEnabled, fgWeight, includeOther, isPublic, bundlePrices } = req.body || {};
+    const weightsPayload = markets
+      ? JSON.stringify({ markets, referenceAsset: referenceAsset || null })
+      : (weights ? JSON.stringify({ ...weights, referenceAsset: referenceAsset || weights.referenceAsset || null }) : null);
     const bp = bundlePrices || {};
     // Set published_at when flipping from private to public for the first time
     const setPublishedAt = (isPublic === true && !existing[0].is_public && !existing[0].published_at);
@@ -190,24 +216,26 @@ async function handlePublic(req, res) {
   const orderBy = sortKey === 'newest' ? sql`i.created_at DESC` : sortKey === 'name' ? sql`i.name ASC` : sql`i.latest_score DESC NULLS LAST`;
 
   await ensureForkColumns();
+  await ensureEngagement();
   try {
     let rows;
     if (sector) {
-      rows = await sql`SELECT i.id, i.name, i.sector, i.asset, i.is_public, i.latest_score, i.markets, i.weights, i.fg_enabled, i.fg_weight, i.created_at, i.published_at, i.forked_from, i.fork_count, u.display_name as creator_name FROM indicators i JOIN users u ON i.user_id = u.id WHERE i.is_public = true AND i.sector = ${sector} ORDER BY ${orderBy} LIMIT ${limit} OFFSET ${offset}`;
+      rows = await sql`SELECT i.id, i.name, i.sector, i.asset, i.is_public, i.latest_score, i.markets, i.weights, i.fg_enabled, i.fg_weight, i.view_count, i.comment_count, i.created_at, i.published_at, i.forked_from, i.fork_count, u.display_name as creator_name FROM indicators i JOIN users u ON i.user_id = u.id WHERE i.is_public = true AND i.sector = ${sector} ORDER BY ${orderBy} LIMIT ${limit} OFFSET ${offset}`;
     } else {
-      rows = await sql`SELECT i.id, i.name, i.sector, i.asset, i.is_public, i.latest_score, i.markets, i.weights, i.fg_enabled, i.fg_weight, i.created_at, i.published_at, i.forked_from, i.fork_count, u.display_name as creator_name FROM indicators i JOIN users u ON i.user_id = u.id WHERE i.is_public = true ORDER BY ${orderBy} LIMIT ${limit} OFFSET ${offset}`;
+      rows = await sql`SELECT i.id, i.name, i.sector, i.asset, i.is_public, i.latest_score, i.markets, i.weights, i.fg_enabled, i.fg_weight, i.view_count, i.comment_count, i.created_at, i.published_at, i.forked_from, i.fork_count, u.display_name as creator_name FROM indicators i JOIN users u ON i.user_id = u.id WHERE i.is_public = true ORDER BY ${orderBy} LIMIT ${limit} OFFSET ${offset}`;
     }
     const indicators = rows.map(r => {
       const w = r.weights || {};
       const markets = w.markets || r.markets || {};
       return {
         id: r.id, name: r.name, sector: r.sector || 'crypto', asset: r.asset || 'BTC',
-        ...(w.markets ? { markets: w.markets } : { weights: w }),
+        ...(Object.keys(markets).length > 0 ? { markets } : { weights: w }),
         referenceAsset: w.referenceAsset || null,
         score: r.latest_score != null ? parseFloat(r.latest_score) : null,
         label: scoreLabel(r.latest_score),
         creator: r.creator_name || 'Anonymous',
         marketCount: typeof markets === 'object' ? Object.keys(markets).length : 0,
+        viewCount: r.view_count || 0, commentCount: r.comment_count || 0,
         fgEnabled: r.fg_enabled || false, fgWeight: r.fg_weight || 30,
         publishedAt: r.published_at, forkedFrom: r.forked_from, forkCount: r.fork_count || 0,
         createdAt: r.created_at,
@@ -219,6 +247,84 @@ async function handlePublic(req, res) {
     console.error('Public indicators error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
+}
+
+async function getPublicIndicator(sql, id) {
+  const rows = await sql`SELECT id, is_public FROM indicators WHERE id = ${id}`;
+  if (rows.length === 0 || !rows[0].is_public) return null;
+  return rows[0];
+}
+
+async function handleView(req, res, id) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  const sql = getDb();
+  await ensureEngagement();
+  const indicator = await getPublicIndicator(sql, id);
+  if (!indicator) return res.status(404).json({ error: 'Not found' });
+  const rows = await sql`
+    UPDATE indicators
+    SET view_count = COALESCE(view_count, 0) + 1
+    WHERE id = ${id}
+    RETURNING view_count
+  `;
+  return res.json({ viewCount: rows[0]?.view_count || 0 });
+}
+
+async function handleComments(req, res, id) {
+  const sql = getDb();
+  await ensureEngagement();
+  const indicator = await getPublicIndicator(sql, id);
+  if (!indicator) return res.status(404).json({ error: 'Not found' });
+
+  if (req.method === 'GET') {
+    const rows = await sql`
+      SELECT c.id, c.body, c.author_name, c.created_at, u.display_name AS user_name
+      FROM indicator_comments c
+      LEFT JOIN users u ON c.user_id = u.id
+      WHERE c.indicator_id = ${id} AND c.deleted_at IS NULL
+      ORDER BY c.created_at DESC
+      LIMIT 50
+    `;
+    return res.json({
+      comments: rows.map(r => ({
+        id: r.id,
+        body: r.body,
+        authorName: r.user_name || r.author_name || 'Anonymous',
+        createdAt: r.created_at,
+      })),
+    });
+  }
+
+  if (req.method === 'POST') {
+    const auth = authenticate(req);
+    const body = String(req.body?.body || '').trim();
+    const authorName = String(req.body?.authorName || '').trim().slice(0, 80) || 'Anonymous';
+    if (body.length < 2) return res.status(400).json({ error: 'Comment is too short' });
+    if (body.length > 1000) return res.status(400).json({ error: 'Comment is too long' });
+    const rows = await sql`
+      INSERT INTO indicator_comments (indicator_id, user_id, author_name, body)
+      VALUES (${id}, ${auth?.id || null}, ${auth ? null : authorName}, ${body})
+      RETURNING id, body, author_name, created_at
+    `;
+    await sql`
+      UPDATE indicators
+      SET comment_count = (
+        SELECT COUNT(*) FROM indicator_comments WHERE indicator_id = ${id} AND deleted_at IS NULL
+      )
+      WHERE id = ${id}
+    `;
+    const c = rows[0];
+    return res.status(201).json({
+      comment: {
+        id: c.id,
+        body: c.body,
+        authorName: auth ? 'You' : (c.author_name || 'Anonymous'),
+        createdAt: c.created_at,
+      },
+    });
+  }
+
+  return res.status(405).json({ error: 'Method not allowed' });
 }
 
 async function handleMigrate(req, res) {
@@ -233,7 +339,10 @@ async function handleMigrate(req, res) {
   for (const ind of indicators) {
     if (!ind.name || !ind.id) continue;
     try {
-      await sql`INSERT INTO indicators (id, user_id, name, sector, asset, weights, fg_enabled, fg_weight, include_other) VALUES (${ind.id}, ${auth.id}, ${ind.name}, ${ind.sector || 'crypto'}, ${ind.asset || 'BTC'}, ${JSON.stringify(ind.weights || {})}, ${ind.fgEnabled || false}, ${ind.fgWeight || 30}, ${ind.includeOther || false}) ON CONFLICT (id) DO NOTHING`;
+      const weightsPayload = ind.markets
+        ? { markets: ind.markets, referenceAsset: ind.referenceAsset || null }
+        : { ...(ind.weights || {}), referenceAsset: ind.referenceAsset || ind.weights?.referenceAsset || null };
+      await sql`INSERT INTO indicators (id, user_id, name, sector, asset, weights, fg_enabled, fg_weight, include_other) VALUES (${ind.id}, ${auth.id}, ${ind.name}, ${ind.sector || 'crypto'}, ${ind.asset || 'BTC'}, ${JSON.stringify(weightsPayload)}, ${ind.fgEnabled || false}, ${ind.fgWeight || 30}, ${ind.includeOther || false}) ON CONFLICT (id) DO NOTHING`;
       imported++;
     } catch (e) { console.error('Migration failed for indicator:', ind.id, e.message); }
   }
@@ -244,6 +353,7 @@ async function handlePage(req, res, id) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
   const sql = getDb();
   await ensureForkColumns();
+  await ensureEngagement();
   const rows = await sql`SELECT i.*, u.display_name as creator_name FROM indicators i JOIN users u ON i.user_id = u.id WHERE i.id = ${id} AND i.is_public = true`;
 
   if (rows.length === 0) {
@@ -252,6 +362,7 @@ async function handlePage(req, res, id) {
   }
 
   const indicator = rows[0];
+  await sql`UPDATE indicators SET view_count = COALESCE(view_count, 0) + 1 WHERE id = ${id}`.catch(() => {});
   let result;
   try { result = await computeIndicator(indicator); } catch (e) {
     console.error('Compute error:', e);

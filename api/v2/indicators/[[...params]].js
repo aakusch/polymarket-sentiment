@@ -1,8 +1,8 @@
 const { validateApiKey } = require('../../_lib/apikey');
 const { computeIndicator } = require('../../_lib/compute');
-const { getDb } = require('../../_lib/db');
+const { withDatabaseConfigError } = require('../../_lib/db');
 
-module.exports = async function handler(req, res) {
+module.exports = withDatabaseConfigError(async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   const raw = req.query.params ?? req.query["[...params]"]; const params = (Array.isArray(raw) ? raw : raw ? [raw] : []).filter(p => p !== '__root');
@@ -15,7 +15,7 @@ module.exports = async function handler(req, res) {
   if (params.length === 2 && params[1] === 'timeseries') return handleTimeseries(req, res, params[0]);
 
   return res.status(404).json({ error: 'Not found' });
-};
+});
 
 async function handleList(req, res) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });

@@ -1,5 +1,7 @@
 -- PMSI Platform schema — users, indicators, API keys, usage, payments
 
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email TEXT UNIQUE,
@@ -17,12 +19,23 @@ CREATE TABLE IF NOT EXISTS indicators (
     sector TEXT NOT NULL DEFAULT 'crypto',
     asset TEXT NOT NULL DEFAULT 'BTC',
     weights JSONB NOT NULL,
+    markets JSONB,
     fg_enabled BOOLEAN DEFAULT false,
     fg_weight INTEGER DEFAULT 30,
     include_other BOOLEAN DEFAULT false,
     is_public BOOLEAN DEFAULT true,
+    latest_score NUMERIC,
+    view_count INTEGER DEFAULT 0,
+    comment_count INTEGER DEFAULT 0,
     price_per_100 NUMERIC(12,6),
+    price_bundle_10 NUMERIC(12,6),
+    price_bundle_50 NUMERIC(12,6),
+    price_bundle_100 NUMERIC(12,6),
+    price_bundle_500 NUMERIC(12,6),
     price_token TEXT DEFAULT 'SOL',
+    published_at TIMESTAMPTZ,
+    forked_from TEXT,
+    fork_count INTEGER DEFAULT 0,
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now()
 );
@@ -64,4 +77,27 @@ CREATE TABLE IF NOT EXISTS payments (
     status TEXT DEFAULT 'pending',
     confirmed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS indicator_comments (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    indicator_id TEXT NOT NULL REFERENCES indicators(id) ON DELETE CASCADE,
+    user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    author_name TEXT,
+    body TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    deleted_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS pipeline_runs (
+    id TEXT PRIMARY KEY,
+    job_type TEXT NOT NULL,
+    sector TEXT,
+    status TEXT NOT NULL,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    finished_at TIMESTAMPTZ,
+    duration_ms INTEGER,
+    scoring_version TEXT,
+    summary_json TEXT,
+    error TEXT
 );

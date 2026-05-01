@@ -2,6 +2,14 @@
 
 const sectorDataCache = {};
 const assetDataCache = {};  // { "crypto:BTC": assetPayload }
+let dataRefreshNonce = '';
+let syncInFlight = false;
+let metaCache = null;
+
+function dataUrl(url) {
+  if (!dataRefreshNonce) return url;
+  return url + (url.includes('?') ? '&' : '?') + 'v=' + encodeURIComponent(dataRefreshNonce);
+}
 
 function buildRefMap(ref) {
   const refMap = {};
@@ -18,6 +26,18 @@ function buildRefMap(ref) {
   return refMap;
 }
 
+async function loadMetaData() {
+  try {
+    metaCache = await fetch(dataUrl('data/meta.json'), { cache: 'no-store' }).then(r => {
+      if (!r.ok) throw new Error('meta unavailable');
+      return r.json();
+    });
+  } catch (_) {
+    metaCache = null;
+  }
+  return metaCache;
+}
+
 async function loadSectorData(sectorId) {
   if (sectorDataCache[sectorId]) return sectorDataCache[sectorId];
 
@@ -31,8 +51,8 @@ async function loadSectorData(sectorId) {
 
     try {
       const [manifest, latestData] = await Promise.all([
-        fetch(manifestUrl).then(r => { if (!r.ok) throw new Error('no manifest'); return r.json(); }),
-        fetch(sector.dataFiles.latest).then(r => r.json()),
+        fetch(dataUrl(manifestUrl), { cache: 'no-store' }).then(r => { if (!r.ok) throw new Error('no manifest'); return r.json(); }),
+        fetch(dataUrl(sector.dataFiles.latest), { cache: 'no-store' }).then(r => r.json()),
       ]);
       latest = latestData;
 
@@ -41,7 +61,7 @@ async function loadSectorData(sectorId) {
       const defaultAsset = assetKeys.includes('BTC') ? 'BTC' : assetKeys[0];
 
       if (defaultAsset && manifest.assets[defaultAsset]) {
-        const assetPayload = await fetch(manifest.assets[defaultAsset].file).then(r => r.json());
+        const assetPayload = await fetch(dataUrl(manifest.assets[defaultAsset].file), { cache: 'no-store' }).then(r => r.json());
         refMap = buildRefMap(assetPayload.ref);
 
         // Build sandbox structure from single asset
@@ -58,8 +78,8 @@ async function loadSectorData(sectorId) {
     } catch (_) {
       // Fallback: load monolithic sandbox.json
       const [sandboxData, latestData] = await Promise.all([
-        fetch(sector.dataFiles.sandbox).then(r => r.json()),
-        fetch(sector.dataFiles.latest).then(r => r.json()),
+        fetch(dataUrl(sector.dataFiles.sandbox), { cache: 'no-store' }).then(r => r.json()),
+        fetch(dataUrl(sector.dataFiles.latest), { cache: 'no-store' }).then(r => r.json()),
       ]);
       sandbox = sandboxData;
       latest = latestData;
@@ -67,6 +87,7 @@ async function loadSectorData(sectorId) {
     }
 
     sectorDataCache[sectorId] = { sandbox, latest, refMap };
+    if (typeof invalidateMarketHistoryIndex === 'function') invalidateMarketHistoryIndex();
     return sectorDataCache[sectorId];
   } catch (e) {
     console.error(`Failed to load data for sector "${sectorId}":`, e);
@@ -86,7 +107,7 @@ async function loadAssetData(sectorId, asset) {
   if (!assetMeta) return false;
 
   try {
-    const assetPayload = await fetch(assetMeta.file).then(r => r.json());
+    const assetPayload = await fetch(dataUrl(assetMeta.file), { cache: 'no-store' }).then(r => r.json());
     // Merge into existing sandbox structure
     if (!cached.sandbox.assets) cached.sandbox.assets = {};
     cached.sandbox.assets[asset] = {
@@ -95,6 +116,7 @@ async function loadAssetData(sectorId, asset) {
       markets: assetPayload.markets,
     };
     assetDataCache[cacheKey] = true;
+    if (typeof invalidateMarketHistoryIndex === 'function') invalidateMarketHistoryIndex();
     return true;
   } catch (e) {
     console.error(`Failed to load asset data for ${asset}:`, e);
@@ -109,6 +131,18 @@ async function ensureSectorsLoaded(sectorIds) {
   if (toLoad.length > 0) {
     await Promise.all(toLoad.map(s => loadSectorData(s)));
   }
+}
+
+async function ensureAllSectorAssetsLoaded(sectorIds) {
+  await ensureSectorsLoaded(sectorIds);
+  const loads = [];
+  for (const sectorId of sectorIds) {
+    const manifest = sectorDataCache[sectorId]?.sandbox?._manifest;
+    for (const asset of Object.keys(manifest?.assets || {})) {
+      loads.push(loadAssetData(sectorId, asset));
+    }
+  }
+  if (loads.length > 0) await Promise.all(loads);
 }
 
 // ── Indicator Migration ─────────────────────────────────────────────────
@@ -222,71 +256,125 @@ function fmtBTC(n) {
   return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 0 });
 }
 
+function escapeAttr(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 // ── Freshness Badge ─────────────────────────────────────────────────────
 
-async function updateFreshnessBadge() {
+function syncIcon(spin = false) {
+  return `<svg class="w-3 h-3${spin ? ' animate-spin' : ''}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>`;
+}
+
+function getLatestGeneratedAt() {
+  const metaDates = Object.values(metaCache?.sectors || {})
+    .map(s => s?.generated_at)
+    .filter(Boolean)
+    .map(raw => new Date(raw))
+    .filter(d => Number.isFinite(d.getTime()));
+  const dataDates = Object.values(sectorDataCache)
+    .map(data => data?.latest?.generated_at || data?.sandbox?.generated_at)
+    .filter(Boolean)
+    .map(raw => new Date(raw))
+    .filter(d => Number.isFinite(d.getTime()));
+  const dates = [...metaDates, ...dataDates];
+  if (dates.length === 0) return null;
+  return new Date(Math.max(...dates.map(d => d.getTime())));
+}
+
+function getFreshnessTitle(generatedAt) {
+  if (!generatedAt) return 'No generated data has loaded yet';
+  const sectorEntries = Object.entries(metaCache?.sectors || {});
+  const sectorSummary = sectorEntries.length
+    ? sectorEntries.map(([id, s]) => `${id}: ${s.latest_date || 'no date'} (${s.status || 'unknown'})`).join('\n')
+    : 'Sector metadata unavailable';
+  const scoreVersion = metaCache?.scoring_version ? `\nScoring: ${metaCache.scoring_version}` : '';
+  return `Generated: ${generatedAt.toLocaleString()}${scoreVersion}\n${sectorSummary}`;
+}
+
+function getFreshnessMeta(generatedAt) {
+  if (!generatedAt) {
+    return { label: 'Data unavailable', age: '--', dot: '#6b7280', textClass: 'text-gray-400' };
+  }
+  const now = new Date();
+  const diffMs = Math.max(0, now - generatedAt);
+  const diffH = Math.floor(diffMs / 3600000);
+  const diffD = Math.floor(diffH / 24);
+
+  if (diffH < 6) {
+    return { label: 'Data current', age: diffH < 1 ? '<1h ago' : diffH + 'h ago', dot: '#4ade80', textClass: 'text-green-400' };
+  }
+  if (diffH < 24) {
+    return { label: 'Data aging', age: diffH + 'h ago', dot: '#fbbf24', textClass: 'text-yellow-400' };
+  }
+  return { label: 'Data stale', age: diffD + 'd ago', dot: '#f87171', textClass: 'text-red-400' };
+}
+
+async function updateFreshnessBadge(state = 'idle', message = '') {
   try {
-    const data = sectorDataCache['crypto'];
-    const generatedAt = data?.latest?.generated_at || data?.sandbox?.generated_at;
-    if (!generatedAt) return;
-
-    const gen = new Date(generatedAt);
-    const now = new Date();
-    const diffMs = now - gen;
-    const diffH = Math.floor(diffMs / 3600000);
-    const diffD = Math.floor(diffH / 24);
-
-    let text, dotColor, textColor;
-    if (diffH < 1) {
-      text = '<1h ago';
-      dotColor = '#4ade80'; textColor = 'text-green-400';
-    } else if (diffH < 6) {
-      text = diffH + 'h ago';
-      dotColor = '#4ade80'; textColor = 'text-green-400';
-    } else if (diffH < 24) {
-      text = diffH + 'h ago';
-      dotColor = '#fbbf24'; textColor = 'text-yellow-400';
-    } else {
-      text = diffD + 'd ago';
-      dotColor = '#f87171'; textColor = 'text-red-400';
-    }
-
     const el = document.getElementById('nav-score');
-    if (el) {
-      el.innerHTML = `
-        <div class="flex items-center gap-2">
-          <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-gray-800/60 border border-gray-700/50" title="Last data sync: ${gen.toLocaleString()}">
-            <span style="width:6px;height:6px;border-radius:50%;background:${dotColor};display:inline-block"></span>
-            <span class="text-xs text-gray-400">Synced</span>
-            <span class="text-xs font-medium ${textColor}">${text}</span>
-          </div>
-          <button onclick="triggerSync()" id="sync-btn" class="flex items-center gap-1 px-2.5 py-1 rounded-full text-xs text-gray-400 bg-gray-800/60 border border-gray-700/50 hover:border-blue-500/50 hover:text-blue-400 transition-colors" title="Refresh data">
-            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-            Sync
-          </button>
-        </div>`;
-    }
+    if (!el) return;
+
+    const generatedAt = getLatestGeneratedAt();
+    const meta = getFreshnessMeta(generatedAt);
+    const title = escapeAttr(getFreshnessTitle(generatedAt));
+    const busy = state === 'refreshing';
+    const failed = state === 'error';
+    const updated = state === 'updated';
+    const buttonText = busy ? 'Refreshing' : failed ? 'Retry' : updated ? 'Updated' : 'Refresh View';
+    const statusLabel = failed ? 'Refresh failed' : updated ? 'View refreshed' : meta.label;
+    const statusAge = message || meta.age;
+    const dotColor = failed ? '#f87171' : updated ? '#4ade80' : meta.dot;
+    const statusTextClass = failed ? 'text-red-400' : updated ? 'text-green-400' : meta.textClass;
+
+    el.innerHTML = `
+      <div class="flex items-center gap-2">
+        <div class="data-status flex items-center gap-1.5 px-2.5 py-1 rounded-full" title="${title}">
+          <span style="width:6px;height:6px;border-radius:50%;background:${dotColor};display:inline-block"></span>
+          <span class="text-xs text-gray-400">${statusLabel}</span>
+          <span class="text-xs font-medium ${statusTextClass}">${statusAge}</span>
+        </div>
+        <button onclick="triggerSync()" id="sync-btn" ${busy ? 'disabled' : ''} class="sync-btn flex items-center gap-1 px-2.5 py-1 rounded-full text-xs text-gray-400 transition-colors" title="Reload published data files and repaint the current view. This does not run collection.">
+          ${syncIcon(busy)}
+          <span>${buttonText}</span>
+        </button>
+      </div>`;
   } catch (_) {}
 }
 
 async function triggerSync() {
-  const btn = document.getElementById('sync-btn');
-  if (!btn || btn.disabled) return;
-  btn.disabled = true;
-  btn.innerHTML = '<svg class="w-3 h-3 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg> Syncing...';
+  if (syncInFlight) return;
+  syncInFlight = true;
+  dataRefreshNonce = Date.now().toString();
+  await updateFreshnessBadge('refreshing');
 
-  // Clear cached data and reload all sectors
+  // Clear cached data and reload all static sector files. Collection still runs in the pipeline/workflow.
   for (const key of Object.keys(sectorDataCache)) delete sectorDataCache[key];
   for (const key of Object.keys(assetDataCache)) delete assetDataCache[key];
+  metaCache = null;
+  if (typeof invalidateMarketHistoryIndex === 'function') invalidateMarketHistoryIndex();
+  if (typeof _indicatorCache !== 'undefined') _indicatorCache = null;
 
   try {
+    await loadMetaData();
     const loads = SECTOR_ORDER.filter(s => SECTORS[s]?.available).map(s => loadSectorData(s));
-    await Promise.all(loads);
-    await updateFreshnessBadge();
-    handleRoute(); // Re-render current page with fresh data
-  } catch (_) {}
-
-  btn.disabled = false;
+    const loaded = await Promise.all(loads);
+    const loadedCount = loaded.filter(Boolean).length;
+    if (loadedCount === 0) throw new Error('No sector data loaded');
+    handleRoute();
+    await updateFreshnessBadge('updated', `${loadedCount} sectors`);
+    setTimeout(() => updateFreshnessBadge(), 1600);
+  } catch (err) {
+    console.error('Data refresh failed:', err);
+    await updateFreshnessBadge('error', 'Check data files');
+    setTimeout(() => updateFreshnessBadge(), 2400);
+  } finally {
+    syncInFlight = false;
+  }
 }
 
 // ── Boot ────────────────────────────────────────────────────────────────
@@ -296,7 +384,7 @@ function init() {
   migrateIndicators();
   handleRoute();
   // Show freshness badge once crypto data loads
-  loadSectorData('crypto').then(updateFreshnessBadge);
+  Promise.all([loadMetaData(), loadSectorData('crypto')]).then(() => updateFreshnessBadge());
 }
 
 document.addEventListener('DOMContentLoaded', init);

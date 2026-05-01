@@ -4,8 +4,28 @@
  */
 
 const { neon } = require('@neondatabase/serverless');
+const fs = require('fs');
+const path = require('path');
 
-const DATABASE_URL = process.env.DATABASE_URL;
+function loadLocalEnv() {
+  for (const file of ['.env.local', '.env']) {
+    const full = path.join(__dirname, '..', file);
+    if (!fs.existsSync(full)) continue;
+    for (const raw of fs.readFileSync(full, 'utf8').split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line || line.startsWith('#') || !line.includes('=')) continue;
+      const idx = line.indexOf('=');
+      const key = line.slice(0, idx).trim();
+      let value = line.slice(idx + 1).trim().replace(/^['"]|['"]$/g, '');
+      value = value.replace(/\\n/g, '').trim();
+      if (key && process.env[key] == null) process.env[key] = value;
+    }
+  }
+}
+
+loadLocalEnv();
+
+const DATABASE_URL = (process.env.DATABASE_URL || '').replace(/\\n/g, '').trim();
 if (!DATABASE_URL) { console.error('DATABASE_URL required'); process.exit(1); }
 
 const sql = neon(DATABASE_URL);
@@ -171,15 +191,58 @@ async function seed() {
       include_other BOOLEAN DEFAULT false,
       is_public BOOLEAN DEFAULT true,
       latest_score NUMERIC,
+      view_count INTEGER DEFAULT 0,
+      comment_count INTEGER DEFAULT 0,
       price_per_100 NUMERIC(12,6),
+      price_bundle_10 NUMERIC(12,6),
+      price_bundle_50 NUMERIC(12,6),
+      price_bundle_100 NUMERIC(12,6),
+      price_bundle_500 NUMERIC(12,6),
       price_token TEXT DEFAULT 'SOL',
+      published_at TIMESTAMPTZ,
+      forked_from TEXT,
+      fork_count INTEGER DEFAULT 0,
       created_at TIMESTAMPTZ DEFAULT now(),
       updated_at TIMESTAMPTZ DEFAULT now()
     )
   `;
-  // Add latest_score and markets columns if missing (existing tables)
-  await sql`ALTER TABLE indicators ADD COLUMN IF NOT EXISTS latest_score NUMERIC`.catch(() => {});
+  // Add columns if missing (existing tables)
   await sql`ALTER TABLE indicators ADD COLUMN IF NOT EXISTS markets JSONB`.catch(() => {});
+  await sql`ALTER TABLE indicators ADD COLUMN IF NOT EXISTS latest_score NUMERIC`.catch(() => {});
+  await sql`ALTER TABLE indicators ADD COLUMN IF NOT EXISTS view_count INTEGER DEFAULT 0`.catch(() => {});
+  await sql`ALTER TABLE indicators ADD COLUMN IF NOT EXISTS comment_count INTEGER DEFAULT 0`.catch(() => {});
+  await sql`ALTER TABLE indicators ADD COLUMN IF NOT EXISTS price_bundle_10 NUMERIC(12,6)`.catch(() => {});
+  await sql`ALTER TABLE indicators ADD COLUMN IF NOT EXISTS price_bundle_50 NUMERIC(12,6)`.catch(() => {});
+  await sql`ALTER TABLE indicators ADD COLUMN IF NOT EXISTS price_bundle_100 NUMERIC(12,6)`.catch(() => {});
+  await sql`ALTER TABLE indicators ADD COLUMN IF NOT EXISTS price_bundle_500 NUMERIC(12,6)`.catch(() => {});
+  await sql`ALTER TABLE indicators ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ`.catch(() => {});
+  await sql`ALTER TABLE indicators ADD COLUMN IF NOT EXISTS forked_from TEXT`.catch(() => {});
+  await sql`ALTER TABLE indicators ADD COLUMN IF NOT EXISTS fork_count INTEGER DEFAULT 0`.catch(() => {});
+  await sql`
+    CREATE TABLE IF NOT EXISTS pipeline_runs (
+      id TEXT PRIMARY KEY,
+      job_type TEXT NOT NULL,
+      sector TEXT,
+      status TEXT NOT NULL,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      finished_at TIMESTAMPTZ,
+      duration_ms INTEGER,
+      scoring_version TEXT,
+      summary_json TEXT,
+      error TEXT
+    )
+  `.catch(() => {});
+  await sql`
+    CREATE TABLE IF NOT EXISTS indicator_comments (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      indicator_id TEXT NOT NULL REFERENCES indicators(id) ON DELETE CASCADE,
+      user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      author_name TEXT,
+      body TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      deleted_at TIMESTAMPTZ
+    )
+  `.catch(() => {});
 
   // Upsert demo user
   await sql`

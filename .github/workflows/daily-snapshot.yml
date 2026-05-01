@@ -22,6 +22,13 @@ jobs:
       - name: Install dependencies
         run: pip install -r pipeline/requirements.txt
 
+      - name: Validate required secrets
+        run: |
+          if [ -z "${{ secrets.DATABASE_URL }}" ]; then
+            echo "DATABASE_URL GitHub secret is required for production snapshots."
+            exit 1
+          fi
+
       - name: Run snapshot (crypto)
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
@@ -30,17 +37,17 @@ jobs:
       - name: Run snapshot (politics)
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: cd pipeline && python3 snapshot.py --sector politics --skip-order-books -v || echo "Politics snapshot failed (non-critical)"
+        run: cd pipeline && python3 snapshot.py --sector politics --skip-order-books -v
 
       - name: Run snapshot (stocks)
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: cd pipeline && python3 snapshot.py --sector stocks --skip-order-books -v || echo "Stocks snapshot failed (non-critical)"
+        run: cd pipeline && python3 snapshot.py --sector stocks --skip-order-books -v
 
       - name: Run snapshot (economy)
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: cd pipeline && python3 snapshot.py --sector economy --skip-order-books -v || echo "Economy snapshot failed (non-critical)"
+        run: cd pipeline && python3 snapshot.py --sector economy --skip-order-books -v
 
       - name: Export dashboard JSON (crypto)
         env:
@@ -50,42 +57,25 @@ jobs:
       - name: Export dashboard JSON (politics)
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: cd pipeline && python3 export.py --sector politics -v || echo "Politics export failed (non-critical)"
+        run: cd pipeline && python3 export.py --sector politics -v
 
       - name: Export dashboard JSON (stocks)
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: cd pipeline && python3 export.py --sector stocks -v || echo "Stocks export failed (non-critical)"
+        run: cd pipeline && python3 export.py --sector stocks -v
 
       - name: Export dashboard JSON (economy)
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: cd pipeline && python3 export.py --sector economy -v || echo "Economy export failed (non-critical)"
+        run: cd pipeline && python3 export.py --sector economy -v
+
+      - name: Validate exported dashboard JSON
+        run: npm run validate:data -- --max-age-days 3
 
       - name: Update latest_score for public indicators
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: |
-          python3 -c "
-          import os, psycopg2
-          conn = psycopg2.connect(os.environ['DATABASE_URL'])
-          cur = conn.cursor()
-          cur.execute('''
-            UPDATE indicators SET latest_score = sub.score FROM (
-              SELECT i.id, (
-                SELECT ROUND(((SUM(ms.sentiment_signal * ms.weight * (m.value::float/100)) /
-                  NULLIF(SUM(ms.weight * (m.value::float/100)), 0)) + 1) * 50, 1)
-                FROM jsonb_each_text(i.markets) m
-                JOIN market_snapshots ms ON ms.market_id = m.key AND ms.asset = i.asset
-                WHERE ms.date = (SELECT MAX(date) FROM market_snapshots WHERE asset = i.asset)
-              ) as score
-              FROM indicators i WHERE i.is_public = true AND i.markets IS NOT NULL
-            ) sub WHERE indicators.id = sub.id AND sub.score IS NOT NULL
-          ''')
-          conn.commit()
-          print(f'Updated {cur.rowcount} indicators')
-          conn.close()
-          " 2>&1 || echo "latest_score update skipped (non-critical)"
+        run: cd pipeline && python3 update_latest_scores.py -v
 
       - name: Check alerts
         env:

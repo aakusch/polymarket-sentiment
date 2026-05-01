@@ -1,8 +1,8 @@
 const crypto = require('crypto');
-const { getDb } = require('../../_lib/db');
+const { getDb, withDatabaseConfigError } = require('../../_lib/db');
 const { computeIndicator } = require('../../_lib/compute');
 
-module.exports = async function handler(req, res) {
+module.exports = withDatabaseConfigError(async function handler(req, res) {
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
@@ -86,4 +86,4 @@ module.exports = async function handler(req, res) {
     credits_remaining: key.credits_remaining - 1,
     computed_at: new Date().toISOString(),
   });
-};
+});

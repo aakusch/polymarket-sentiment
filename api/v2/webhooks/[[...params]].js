@@ -1,8 +1,8 @@
 const crypto = require('crypto');
-const { getDb } = require('../../_lib/db');
+const { withDatabaseConfigError } = require('../../_lib/db');
 const { validateApiKey } = require('../../_lib/apikey');
 
-module.exports = async function handler(req, res) {
+module.exports = withDatabaseConfigError(async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   const auth = await validateApiKey(req, res, { deductCredit: false, endpoint: '/v2/webhooks' });
@@ -86,4 +86,4 @@ module.exports = async function handler(req, res) {
   }
 
   return res.status(405).json({ error: 'Method not allowed' });
-};
+});

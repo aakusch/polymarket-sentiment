@@ -10,17 +10,19 @@ from datetime import datetime, timezone
 import click
 import requests
 
+from indicator_scores import compute_latest_score, fetch_public_indicators
+
 log = logging.getLogger(__name__)
 
-DATABASE_URL = os.environ.get("DATABASE_URL")
+DATABASE_URL = (os.environ.get("DATABASE_URL") or "").replace("\\n", "").strip()
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY")
 FROM_EMAIL = os.environ.get("ALERT_FROM_EMAIL", "alerts@pmsi.app")
 
 
 def get_db_connection():
-    """Get a psycopg2-compatible connection using DATABASE_URL."""
-    import psycopg2
-    return psycopg2.connect(DATABASE_URL)
+    """Get a database connection using DATABASE_URL."""
+    import psycopg
+    return psycopg.connect(DATABASE_URL)
 
 
 def compute_latest_scores(conn) -> dict[str, float]:
@@ -36,47 +38,10 @@ def compute_latest_scores(conn) -> dict[str, float]:
         return {}
 
     scores = {}
-    for ind_id in indicator_ids:
-        cur.execute("""
-            SELECT i.asset, i.markets, i.weights, i.fg_enabled, i.fg_weight
-            FROM indicators i WHERE i.id = %s AND i.is_public = true
-        """, (ind_id,))
-        row = cur.fetchone()
-        if not row:
-            continue
-
-        asset, markets, weights, fg_enabled, fg_weight = row
-        asset = asset or "BTC"
-
-        if markets and isinstance(markets, dict) and len(markets) > 0:
-            market_ids = list(markets.keys())
-            placeholders = ",".join(["%s"] * len(market_ids))
-            cur.execute(f"""
-                SELECT market_id, sentiment_signal, weight
-                FROM market_snapshots
-                WHERE asset = %s AND market_id IN ({placeholders})
-                AND date = (SELECT MAX(date) FROM market_snapshots WHERE asset = %s)
-            """, [asset] + market_ids + [asset])
-
-            mkt_data = {r[0]: (float(r[1]), float(r[2])) for r in cur.fetchall()}
-            num = den = 0
-            for mid, user_w in markets.items():
-                if mid in mkt_data:
-                    ss, wt = mkt_data[mid]
-                    w = user_w / 100
-                    num += w * ss * wt
-                    den += w * wt
-            score = ((num / den) + 1) * 50 if den > 0 else None
-
-            if score is not None and fg_enabled:
-                cur.execute("SELECT fear_greed FROM reference_prices ORDER BY date DESC LIMIT 1")
-                fg_row = cur.fetchone()
-                if fg_row and fg_row[0] is not None:
-                    blend = (fg_weight or 30) / 100
-                    score = score * (1 - blend) + float(fg_row[0]) * blend
-
-            if score is not None:
-                scores[ind_id] = round(score, 1)
+    for indicator in fetch_public_indicators(conn, indicator_ids):
+        score = compute_latest_score(conn, indicator)
+        if score is not None:
+            scores[indicator["id"]] = score
 
     return scores
 

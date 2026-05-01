@@ -6,12 +6,14 @@ import json
 import logging
 import os
 import sqlite3
+import uuid
 from datetime import date, datetime
 from pathlib import Path
 
 from classifier import Classification
 from config import DB_PATH
 from scorer import MarketScore, SectorScore
+from scoring_contract import SCORING_VERSION
 
 log = logging.getLogger(__name__)
 
@@ -78,6 +80,18 @@ PG_SCHEMA = [
         dxy_price DOUBLE PRECISION,
         gold_price DOUBLE PRECISION,
         oil_price DOUBLE PRECISION
+    )""",
+    """CREATE TABLE IF NOT EXISTS pipeline_runs (
+        id TEXT PRIMARY KEY,
+        job_type TEXT NOT NULL,
+        sector TEXT,
+        status TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        duration_ms INTEGER,
+        scoring_version TEXT,
+        summary_json TEXT,
+        error TEXT
     )""",
 ]
 
@@ -146,6 +160,19 @@ CREATE TABLE IF NOT EXISTS reference_prices (
     gold_price REAL,
     oil_price REAL
 );
+
+CREATE TABLE IF NOT EXISTS pipeline_runs (
+    id TEXT PRIMARY KEY,
+    job_type TEXT NOT NULL,
+    sector TEXT,
+    status TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    duration_ms INTEGER,
+    scoring_version TEXT,
+    summary_json TEXT,
+    error TEXT
+);
 """
 
 MIGRATIONS = [
@@ -174,11 +201,12 @@ def _get_database_url() -> str | None:
     """Get DATABASE_URL from environment, loading .env if available."""
     url = os.environ.get("DATABASE_URL")
     if url:
-        return url
+        return url.replace("\\n", "").strip()
     try:
         from dotenv import load_dotenv
         load_dotenv()
-        return os.environ.get("DATABASE_URL")
+        url = os.environ.get("DATABASE_URL")
+        return url.replace("\\n", "").strip() if url else None
     except ImportError:
         return None
 
@@ -191,7 +219,7 @@ class Database:
         if path:
             self._database_url = None
         else:
-            self._database_url = database_url or _get_database_url()
+            self._database_url = database_url.replace("\\n", "").strip() if database_url else _get_database_url()
         self._is_pg = bool(self._database_url)
         self._sqlite_path = str(path or DB_PATH)
         self._conn = None
@@ -436,6 +464,75 @@ class Database:
             for row in rows
         }
 
+    def start_pipeline_run(self, job_type: str, sector: str | None = None, summary: dict | None = None) -> str:
+        """Record the start of a pipeline job and return its run id."""
+        conn = self.connect()
+        run_id = str(uuid.uuid4())
+        started_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        summary_payload = json.dumps(summary or {})
+        ph = self._ph(10)
+        conn.execute(
+            f"""INSERT INTO pipeline_runs
+                (id, job_type, sector, status, started_at, finished_at, duration_ms, scoring_version, summary_json, error)
+                VALUES ({ph})""",
+            (
+                run_id,
+                job_type,
+                sector,
+                "running",
+                started_at,
+                None,
+                None,
+                SCORING_VERSION,
+                summary_payload,
+                None,
+            ),
+        )
+        conn.commit()
+        return run_id
+
+    def finish_pipeline_run(
+        self,
+        run_id: str,
+        status: str,
+        *,
+        summary: dict | None = None,
+        error: str | None = None,
+    ):
+        """Mark a pipeline run complete, failed, or skipped."""
+        conn = self.connect()
+        rows = self._select("SELECT started_at FROM pipeline_runs WHERE id = " + self._ph(), (run_id,))
+        started_at = rows[0]["started_at"] if rows else None
+        finished_at_dt = datetime.utcnow()
+        duration_ms = None
+        if started_at:
+            try:
+                started = datetime.fromisoformat(str(started_at).replace("Z", "+00:00")).replace(tzinfo=None)
+                duration_ms = int((finished_at_dt - started).total_seconds() * 1000)
+            except (TypeError, ValueError):
+                duration_ms = None
+        finished_at = finished_at_dt.isoformat(timespec="seconds") + "Z"
+        conn.execute(
+            f"""UPDATE pipeline_runs
+                SET status = {self._ph()}, finished_at = {self._ph()}, duration_ms = {self._ph()},
+                    summary_json = {self._ph()}, error = {self._ph()}
+                WHERE id = {self._ph()}""",
+            (status, finished_at, duration_ms, json.dumps(summary or {}), error, run_id),
+        )
+        conn.commit()
+
+    def get_pipeline_status(self, limit: int = 20) -> list[dict]:
+        """Return recent pipeline runs for health and metadata surfaces."""
+        ph = "%s" if self._is_pg else "?"
+        return self._select(
+            f"""SELECT id, job_type, sector, status, started_at, finished_at, duration_ms,
+                       scoring_version, summary_json, error
+                FROM pipeline_runs
+                ORDER BY started_at DESC
+                LIMIT {ph}""",
+            (limit,),
+        )
+
     def get_sector_timeseries(
         self, sector: str, *, start: str | None = None, end: str | None = None
     ) -> list[dict]:
@@ -452,13 +549,16 @@ class Database:
         query += " ORDER BY date"
         return self._select(query, params)
 
-    def get_market_snapshots(self, snapshot_date: str) -> list[dict]:
-        """Get all market scores for a specific date."""
+    def get_market_snapshots(self, snapshot_date: str, sector: str | None = None) -> list[dict]:
+        """Get market scores for a specific date, optionally scoped to a sector."""
         ph = "%s" if self._is_pg else "?"
-        return self._select(
-            f"SELECT * FROM market_snapshots WHERE date = {ph} ORDER BY weight DESC",
-            (snapshot_date,),
-        )
+        query = f"SELECT * FROM market_snapshots WHERE date = {ph}"
+        params: list = [snapshot_date]
+        if sector:
+            query += f" AND sector = {ph}"
+            params.append(sector)
+        query += " ORDER BY weight DESC"
+        return self._select(query, params)
 
     def get_reference_prices(
         self, *, start: str | None = None, end: str | None = None

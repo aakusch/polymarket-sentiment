@@ -2,6 +2,7 @@
   "framework": null,
   "outputDirectory": "public",
   "rewrites": [
+    { "source": "/favicon.ico", "destination": "/favicon.svg" },
     { "source": "/i/:id", "destination": "/api/indicators/:id/page" },
     { "source": "/embed/:id", "destination": "/api/embed/:id" },
     { "source": "/api/indicators/:id/page", "destination": "/api/indicators/:id?action=page" },

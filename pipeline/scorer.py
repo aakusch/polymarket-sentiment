@@ -67,6 +67,33 @@ class SectorScore:
 
 _noise_q_re = [re.compile(p) for p in NOISE_QUESTION_PATTERNS]
 
+SUB_CATEGORY_TYPES = {
+    "crypto": {
+        "price_targets": ["price_above", "price_below", "price_range"],
+        "regulatory": ["regulatory_positive", "regulatory_negative"],
+        "adoption": ["adoption"],
+        "events": ["event_positive", "event_negative"],
+    },
+    "stocks": {
+        "price_targets": ["price_above", "price_below", "price_range"],
+        "earnings": ["earnings_positive", "earnings_negative"],
+        "corporate": ["corporate_positive", "corporate_negative"],
+    },
+    "economy": {
+        "monetary_policy": ["monetary_dovish", "monetary_hawkish"],
+        "inflation": ["inflation_rising", "inflation_falling"],
+        "growth": ["growth_positive", "growth_negative"],
+        "employment": ["employment_positive", "employment_negative"],
+    },
+    "politics": {
+        "favors_incumbent": ["favors_incumbent"],
+        "favors_challenger": ["favors_challenger"],
+        "legislative": ["legislative_positive", "legislative_negative"],
+        "judicial": ["judicial_event"],
+        "geopolitical": ["geopolitical_event"],
+    },
+}
+
 
 def _is_noise_market(question: str) -> bool:
     """Return True if the market question matches a noise pattern."""
@@ -160,16 +187,17 @@ def score_market(
 def _event_deduped_composite(scores: list[MarketScore]) -> float:
     """Compute weighted average after consolidating markets within the same event.
 
-    Each event group is reduced to a single intra-group weighted average signal,
-    then those consolidated signals are combined in a weighted average where each
-    event's weight = sum of its constituent market weights.
+    Each event group is reduced to a single intra-group weighted average signal.
+    The consolidated event then contributes one confidence weight, capped at the
+    strongest constituent market weight, so duplicate markets in the same event
+    cannot dominate the composite merely by being numerous.
     """
     if not scores:
         return 0.0
 
     by_event: dict[str, list[MarketScore]] = defaultdict(list)
     for ms in scores:
-        by_event[ms.event_id].append(ms)
+        by_event[ms.event_id or ms.market_id].append(ms)
 
     weighted_sum = 0.0
     total_weight = 0.0
@@ -178,10 +206,40 @@ def _event_deduped_composite(scores: list[MarketScore]) -> float:
         g_total_w = sum(ms.weight for ms in group)
         if g_total_w > 0:
             consolidated_signal = g_w_sum / g_total_w
-            weighted_sum += consolidated_signal * g_total_w
-            total_weight += g_total_w
+            event_weight = max(ms.weight for ms in group)
+            weighted_sum += consolidated_signal * event_weight
+            total_weight += event_weight
 
     return weighted_sum / total_weight if total_weight > 0 else 0.0
+
+
+def sector_score_from_market_scores(market_scores: list[MarketScore], sector: str = "crypto") -> SectorScore:
+    """Build a SectorScore from pre-scored markets using canonical aggregation."""
+    composite = _event_deduped_composite(market_scores)
+    composite = max(-1.0, min(1.0, composite))
+
+    sub_categories = SUB_CATEGORY_TYPES.get(sector, SUB_CATEGORY_TYPES["crypto"])
+    sub_scores: dict[str, float] = {}
+    for cat_name, types in sub_categories.items():
+        cat_markets = [ms for ms in market_scores if ms.classification in types]
+        sub_scores[cat_name] = _event_deduped_composite(cat_markets) if cat_markets else 0.0
+
+    volumes = [ms.volume_24h for ms in market_scores if ms.volume_24h > 0]
+    liquidities = [ms.liquidity for ms in market_scores if ms.liquidity > 0]
+    bullish_count = sum(1 for ms in market_scores if ms.sentiment_signal > 0.1)
+
+    return SectorScore(
+        composite=composite,
+        composite_normalized=(composite + 1) * 50,
+        market_count=len(market_scores),
+        total_volume_24h=sum(ms.volume_24h for ms in market_scores),
+        total_open_interest=sum(ms.open_interest for ms in market_scores),
+        avg_liquidity=mean(liquidities) if liquidities else 0.0,
+        bullish_pct=(bullish_count / len(market_scores) * 100) if market_scores else 0.0,
+        volume_concentration=_herfindahl(volumes),
+        sub_scores=sub_scores,
+        market_scores=market_scores,
+    )
 
 
 def sector_sentiment(
@@ -189,15 +247,13 @@ def sector_sentiment(
     classifications: dict[str, Classification],
     order_books: dict[str, OrderBookSnapshot] | None = None,
     now: datetime | None = None,
+    sector: str = "crypto",
 ) -> SectorScore:
     """Compute the composite sector sentiment score."""
     order_books = order_books or {}
     now = now or datetime.now(timezone.utc)
 
     market_scores: list[MarketScore] = []
-    weighted_sum = 0.0
-    total_weight = 0.0
-
     for m in markets:
         cls = classifications.get(m.id)
         if not cls:
@@ -216,38 +272,5 @@ def sector_sentiment(
         ms = score_market(m, cls, ob, now)
         market_scores.append(ms)
 
-    # A5: Event-deduplicated composite
-    composite = _event_deduped_composite(market_scores)
-    composite = max(-1.0, min(1.0, composite))
-
-    # Sub-scores by signal type category (also event-deduped)
-    sub_categories = {
-        "price_targets": ["price_above", "price_below", "price_range"],
-        "regulatory": ["regulatory_positive", "regulatory_negative"],
-        "adoption": ["adoption"],
-        "events": ["event_positive", "event_negative"],
-    }
-    sub_scores: dict[str, float] = {}
-    for cat_name, types in sub_categories.items():
-        cat_markets = [ms for ms in market_scores if ms.classification in types]
-        if cat_markets:
-            sub_scores[cat_name] = _event_deduped_composite(cat_markets)
-        else:
-            sub_scores[cat_name] = 0.0
-
-    volumes = [ms.volume_24h for ms in market_scores if ms.volume_24h > 0]
-    liquidities = [ms.liquidity for ms in market_scores if ms.liquidity > 0]
-    bullish_count = sum(1 for ms in market_scores if ms.sentiment_signal > 0.1)
-
-    return SectorScore(
-        composite=composite,
-        composite_normalized=(composite + 1) * 50,
-        market_count=len(market_scores),
-        total_volume_24h=sum(ms.volume_24h for ms in market_scores),
-        total_open_interest=sum(ms.open_interest for ms in market_scores),
-        avg_liquidity=mean(liquidities) if liquidities else 0.0,
-        bullish_pct=(bullish_count / len(market_scores) * 100) if market_scores else 0.0,
-        volume_concentration=_herfindahl(volumes),
-        sub_scores=sub_scores,
-        market_scores=market_scores,
-    )
+    # A5: Event-deduplicated composite and sub-scores
+    return sector_score_from_market_scores(market_scores, sector=sector)

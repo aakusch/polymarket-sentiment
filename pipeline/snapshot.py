@@ -32,66 +32,94 @@ async def run_snapshot(
     """
     snapshot_date = snapshot_date or date.today()
     log.info("Starting snapshot for sector=%s date=%s", sector, snapshot_date)
-
-    # 1. Discover markets
-    log.info("Step 1/5: Discovering markets...")
-    discoverer = Discoverer(sector)
-    events = await discoverer.discover(active_only=True)
-    all_markets = [m for e in events for m in e.markets]
-    log.info("Found %d events, %d markets", len(events), len(all_markets))
-
-    if not all_markets:
-        log.warning("No markets found — aborting snapshot")
-        return {"error": "no_markets", "market_count": 0}
-
-    # 2. Classify markets
-    log.info("Step 2/5: Classifying markets...")
-    classifications = classify_batch(all_markets, sector=sector)
-
-    if use_llm:
-        classifications = await classify_batch_with_llm(all_markets, classifications)
-
-    # 3. Collect order book data
-    order_books = {}
-    if not skip_order_books:
-        log.info("Step 3/5: Collecting order books...")
-        collector = Collector()
-        order_books = await collector.collect_order_books(all_markets)
-    else:
-        log.info("Step 3/5: Skipping order books (--skip-order-books)")
-
-    # 4. Compute scores
-    log.info("Step 4/5: Computing scores...")
-    now = datetime.now(timezone.utc)
-    score = sector_sentiment(all_markets, classifications, order_books, now)
-
-    # 5. Persist to database
-    log.info("Step 5/6: Saving to database...")
     db = Database(db_path)
-    with db:
-        db.save_snapshot(snapshot_date, sector, score)
-        db.save_classifications(classifications)
+    run_id: str | None = None
 
-        # 6. Fetch reference prices (sector-appropriate feeds)
-        log.info("Step 6/6: Updating reference prices for sector '%s'...", sector)
-        try:
-            await update_reference_prices(db, sector=sector, days=365)
-        except Exception as e:
-            log.warning("Reference price update failed (non-fatal): %s", e)
+    try:
+        with db:
+            run_id = db.start_pipeline_run(
+                "snapshot",
+                sector,
+                {
+                    "date": str(snapshot_date),
+                    "use_llm": use_llm,
+                    "skip_order_books": skip_order_books,
+                },
+            )
 
-    summary = {
-        "date": str(snapshot_date),
-        "sector": sector,
-        "composite": round(score.composite, 4),
-        "composite_normalized": round(score.composite_normalized, 1),
-        "market_count": score.market_count,
-        "total_volume_24h": round(score.total_volume_24h, 2),
-        "total_open_interest": round(score.total_open_interest, 2),
-        "bullish_pct": round(score.bullish_pct, 1),
-        "sub_scores": {k: round(v, 4) for k, v in score.sub_scores.items()},
-    }
-    log.info("Snapshot complete: %s", summary)
-    return summary
+        # 1. Discover markets
+        log.info("Step 1/5: Discovering markets...")
+        discoverer = Discoverer(sector)
+        events = await discoverer.discover(active_only=True)
+        all_markets = [m for e in events for m in e.markets]
+        log.info("Found %d events, %d markets", len(events), len(all_markets))
+
+        if not all_markets:
+            log.warning("No markets found — aborting snapshot")
+            summary = {"error": "no_markets", "market_count": 0, "sector": sector, "date": str(snapshot_date)}
+            with db:
+                db.finish_pipeline_run(run_id, "failed", summary=summary, error="no_markets")
+            return summary
+
+        # 2. Classify markets
+        log.info("Step 2/5: Classifying markets...")
+        classifications = classify_batch(all_markets, sector=sector)
+
+        if use_llm:
+            classifications = await classify_batch_with_llm(all_markets, classifications)
+
+        # 3. Collect order book data
+        order_books = {}
+        if not skip_order_books:
+            log.info("Step 3/5: Collecting order books...")
+            collector = Collector()
+            order_books = await collector.collect_order_books(all_markets)
+        else:
+            log.info("Step 3/5: Skipping order books (--skip-order-books)")
+
+        # 4. Compute scores
+        log.info("Step 4/5: Computing scores...")
+        now = datetime.now(timezone.utc)
+        score = sector_sentiment(all_markets, classifications, order_books, now, sector=sector)
+
+        summary = {
+            "date": str(snapshot_date),
+            "sector": sector,
+            "composite": round(score.composite, 4),
+            "composite_normalized": round(score.composite_normalized, 1),
+            "market_count": score.market_count,
+            "total_volume_24h": round(score.total_volume_24h, 2),
+            "total_open_interest": round(score.total_open_interest, 2),
+            "bullish_pct": round(score.bullish_pct, 1),
+            "sub_scores": {k: round(v, 4) for k, v in score.sub_scores.items()},
+        }
+
+        # 5. Persist to database
+        log.info("Step 5/6: Saving to database...")
+        with db:
+            db.save_snapshot(snapshot_date, sector, score)
+            db.save_classifications(classifications)
+
+            # 6. Fetch reference prices (sector-appropriate feeds)
+            log.info("Step 6/6: Updating reference prices for sector '%s'...", sector)
+            try:
+                await update_reference_prices(db, sector=sector, days=365)
+            except Exception as e:
+                log.warning("Reference price update failed (non-fatal): %s", e)
+                summary["reference_price_error"] = str(e)
+
+            db.finish_pipeline_run(run_id, "success", summary=summary)
+
+        log.info("Snapshot complete: %s", summary)
+        return summary
+    except Exception as exc:
+        if run_id:
+            try:
+                with db:
+                    db.finish_pipeline_run(run_id, "failed", summary={"sector": sector, "date": str(snapshot_date)}, error=str(exc))
+            except Exception:
+                log.exception("Failed to record failed pipeline run")
+        raise
 
 
 @click.command()

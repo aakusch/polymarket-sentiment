@@ -114,20 +114,20 @@ function renderDocsPage() {
     <section id="doc-predictive" class="scroll-mt-20 mb-12">
       <h2 class="text-xl font-medium text-gray-100 mb-4">Predictive Score</h2>
       <div class="bg-gray-800/40 rounded-xl p-6 border border-gray-700/40 space-y-5">
-        <p class="text-sm text-gray-400 leading-relaxed">Measures how well an indicator's scores frontrun reference asset price moves using lagged Pearson cross-correlation.</p>
+        <p class="text-sm text-gray-400 leading-relaxed">Measures how well an indicator's scores lead future reference asset returns using lagged Pearson cross-correlation.</p>
         <div>
           <div class="text-xs text-gray-500 uppercase tracking-wide mb-2">Method</div>
           <ol class="text-xs text-gray-400 space-y-1.5 list-decimal list-inside leading-relaxed">
             <li>For each lag in ${code('[1, 2, 3, 5, 7, 14, 21, 30]')} days:</li>
-            <li class="ml-4">Compute Pearson ${code('r')} between ${code('scores[i]')} and ${code('prices[i + lag]')}</li>
+            <li class="ml-4">Compute Pearson ${code('r')} between ${code('scores[i]')} and forward return ${code('prices[i + lag] / prices[i] - 1')}</li>
             <li class="ml-4">Require minimum 10 valid pairs per lag</li>
-            <li>Track the peak ${code('|r|')} and its corresponding lag</li>
+            <li>Track the strongest positive signed ${code('r')} and its corresponding lag</li>
           </ol>
         </div>
         <div>
           <div class="text-xs text-gray-500 uppercase tracking-wide mb-2">Composite formula</div>
-          ${formula('Predictive = |peakCorr| &times; 100 &times; 0.7 + (1 - peakLag / 30) &times; 100 &times; 0.3')}
-          <p class="text-xs text-gray-500 mt-2">Weighted 70% correlation strength, 30% proximity (shorter lags score higher). Clamped to 0\u2013100.</p>
+          ${formula('Predictive = max(0, peakCorr) &times; 100 &times; (0.7 + (1 - peakLag / 30) &times; 0.3)')}
+          <p class="text-xs text-gray-500 mt-2">Negative correlations are reported but score 0 because they imply inverse direction. Shorter lags mildly increase positively correlated scores. Clamped to 0\u2013100.</p>
         </div>
         <div>
           <div class="text-xs text-gray-500 uppercase tracking-wide mb-2">Output</div>

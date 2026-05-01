@@ -27,3 +27,4 @@ migrate.py
 
 # Stale copies
 dashboard/
+.env*.local

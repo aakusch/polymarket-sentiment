@@ -1,5 +1,14 @@
 {
   "private": true,
+  "scripts": {
+    "test": "npm run test:py && npm run test:js && npm run test:syntax",
+    "test:py": "PYTHONPATH=pipeline python3 -m unittest discover -s tests -p 'test_*.py'",
+    "test:js": "node --test tests/*.mjs",
+    "test:syntax": "node --check public/js/app.js && node --check public/js/sandbox.js && node --check public/js/docs.js && node --check api/health.js && node --check 'api/indicators/[[...params]].js' && node --check api/_lib/migrations.js && node --check scripts/validate-data.js",
+    "setup:db": "python3 scripts/setup-db.py",
+    "seed:demo": "node scripts/seed-demo.js",
+    "validate:data": "node scripts/validate-data.js"
+  },
   "dependencies": {
     "@neondatabase/serverless": "^0.10",
     "bcryptjs": "^2.4",

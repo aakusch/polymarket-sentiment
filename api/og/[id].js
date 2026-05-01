@@ -1,8 +1,8 @@
 const { ImageResponse } = require('@vercel/og');
-const { getDb } = require('../_lib/db');
+const { getDb, withDatabaseConfigError } = require('../_lib/db');
 const { computeIndicator } = require('../_lib/compute');
 
-module.exports = async function handler(req, res) {
+module.exports = withDatabaseConfigError(async function handler(req, res) {
   if (req.method !== 'GET') return res.status(405).end();
 
   const { id } = req.query;
@@ -131,6 +131,6 @@ module.exports = async function handler(req, res) {
     console.error('OG image error:', err);
     res.status(500).end();
   }
-};
+});
 
 module.exports.config = { runtime: 'edge' };

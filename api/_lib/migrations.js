@@ -6,15 +6,17 @@ async function ensureBundlePricing() {
   if (_migrated) return;
   const sql = getDb();
   try {
+    await sql`ALTER TABLE indicators ADD COLUMN IF NOT EXISTS markets JSONB`;
+    await sql`ALTER TABLE indicators ADD COLUMN IF NOT EXISTS latest_score NUMERIC`;
     await sql`ALTER TABLE indicators ADD COLUMN IF NOT EXISTS price_bundle_10 NUMERIC(12,6)`;
     await sql`ALTER TABLE indicators ADD COLUMN IF NOT EXISTS price_bundle_50 NUMERIC(12,6)`;
     await sql`ALTER TABLE indicators ADD COLUMN IF NOT EXISTS price_bundle_100 NUMERIC(12,6)`;
     await sql`ALTER TABLE indicators ADD COLUMN IF NOT EXISTS price_bundle_500 NUMERIC(12,6)`;
     await sql`
       CREATE TABLE IF NOT EXISTS api_usage (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        id BIGSERIAL PRIMARY KEY,
         api_key_id UUID NOT NULL,
-        indicator_id UUID,
+        indicator_id TEXT,
         endpoint TEXT,
         response_ms INTEGER,
         called_at TIMESTAMPTZ DEFAULT now()
@@ -44,4 +46,57 @@ async function ensureForkColumns() {
   }
 }
 
-module.exports = { ensureBundlePricing, ensureForkColumns };
+let _observabilityMigrated = false;
+
+async function ensureObservability() {
+  if (_observabilityMigrated) return;
+  const sql = getDb();
+  try {
+    await sql`
+      CREATE TABLE IF NOT EXISTS pipeline_runs (
+        id TEXT PRIMARY KEY,
+        job_type TEXT NOT NULL,
+        sector TEXT,
+        status TEXT NOT NULL,
+        started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        finished_at TIMESTAMPTZ,
+        duration_ms INTEGER,
+        scoring_version TEXT,
+        summary_json TEXT,
+        error TEXT
+      )
+    `;
+    _observabilityMigrated = true;
+  } catch (err) {
+    console.error('Observability migration note:', err.message);
+    _observabilityMigrated = true;
+  }
+}
+
+let _engagementMigrated = false;
+
+async function ensureEngagement() {
+  if (_engagementMigrated) return;
+  const sql = getDb();
+  try {
+    await sql`ALTER TABLE indicators ADD COLUMN IF NOT EXISTS view_count INTEGER DEFAULT 0`;
+    await sql`ALTER TABLE indicators ADD COLUMN IF NOT EXISTS comment_count INTEGER DEFAULT 0`;
+    await sql`
+      CREATE TABLE IF NOT EXISTS indicator_comments (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        indicator_id TEXT NOT NULL REFERENCES indicators(id) ON DELETE CASCADE,
+        user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+        author_name TEXT,
+        body TEXT NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT now(),
+        deleted_at TIMESTAMPTZ
+      )
+    `;
+    _engagementMigrated = true;
+  } catch (err) {
+    console.error('Engagement migration note:', err.message);
+    _engagementMigrated = true;
+  }
+}
+
+module.exports = { ensureBundlePricing, ensureForkColumns, ensureObservability, ensureEngagement };

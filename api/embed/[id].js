@@ -1,7 +1,7 @@
-const { getDb } = require('../_lib/db');
+const { getDb, withDatabaseConfigError } = require('../_lib/db');
 const { computeIndicator } = require('../_lib/compute');
 
-module.exports = async function handler(req, res) {
+module.exports = withDatabaseConfigError(async function handler(req, res) {
   if (req.method !== 'GET') return res.status(405).end();
 
   const { id, theme = 'dark', height = '300' } = req.query;
@@ -101,4 +101,4 @@ x:{grid:{display:false},ticks:{color:'${tickColor}',font:{size:10},maxRotation:0
   res.setHeader('Content-Type', 'text/html');
   res.setHeader('Cache-Control', 'public, s-maxage=300');
   res.send(html);
-};
+});

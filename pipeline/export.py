@@ -11,6 +11,7 @@ from pathlib import Path
 import click
 
 from db import Database
+from scoring_contract import SCORING_VERSION, scoring_metadata
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ SUB_CATEGORY_MAP = {
     "favors_challenger": "favors_challenger",
     "legislative_positive": "legislative",
     "legislative_negative": "legislative",
+    "judicial_event": "judicial",
     "geopolitical_event": "geopolitical",
 }
 
@@ -50,7 +52,7 @@ SECTOR_CATEGORIES = {
     "crypto": ["price_targets", "regulatory", "adoption", "events", "other"],
     "stocks": ["price_targets", "earnings", "corporate", "other"],
     "economy": ["monetary_policy", "inflation", "growth", "employment", "other"],
-    "politics": ["favors_incumbent", "favors_challenger", "legislative", "geopolitical", "other"],
+    "politics": ["favors_incumbent", "favors_challenger", "legislative", "judicial", "geopolitical", "other"],
 }
 
 SECTOR_REF_KEYS = {
@@ -60,13 +62,11 @@ SECTOR_REF_KEYS = {
     "politics": [],
 }
 
-CATEGORY_ORDER = ["price_targets", "regulatory", "adoption", "events"]
-
 OUTPUT_DIR = Path(__file__).parent / "dashboard" / "data"
 MAX_MARKETS = 500
 
 
-def _compute_sub_scores(markets: list[dict]) -> dict[str, dict]:
+def _compute_sub_scores(markets: list[dict], sector: str) -> dict[str, dict]:
     """Compute sub-category scores from per-market snapshots."""
     by_cat: dict[str, list[dict]] = defaultdict(list)
     for m in markets:
@@ -75,7 +75,7 @@ def _compute_sub_scores(markets: list[dict]) -> dict[str, dict]:
             by_cat[cat].append(m)
 
     sub: dict[str, dict] = {}
-    for cat in CATEGORY_ORDER:
+    for cat in [c for c in SECTOR_CATEGORIES.get(sector, []) if c != "other"]:
         ms = by_cat.get(cat, [])
         if ms:
             w_sum = sum(m["sentiment_signal"] * m["weight"] for m in ms)
@@ -88,6 +88,42 @@ def _compute_sub_scores(markets: list[dict]) -> dict[str, dict]:
             }
         else:
             sub[cat] = {"score": 0.0, "normalized": 50.0, "market_count": 0}
+    return sub
+
+
+def _sub_score_counts(markets: list[dict]) -> dict[str, int]:
+    counts: dict[str, int] = defaultdict(int)
+    for m in markets:
+        cat = SUB_CATEGORY_MAP.get(m["classification"])
+        if cat:
+            counts[cat] += 1
+    return counts
+
+
+def _format_stored_sub_scores(sector_row: dict, markets: list[dict], sector: str) -> dict[str, dict]:
+    """Format canonical sector sub-scores saved by the scorer."""
+    raw = sector_row.get("sub_scores_json")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            raw = None
+
+    if not isinstance(raw, dict):
+        return _compute_sub_scores(markets, sector)
+
+    counts = _sub_score_counts(markets)
+    sub: dict[str, dict] = {}
+    for cat in [c for c in SECTOR_CATEGORIES.get(sector, []) if c != "other"]:
+        try:
+            score = float(raw.get(cat, 0.0) or 0.0)
+        except (TypeError, ValueError):
+            score = 0.0
+        sub[cat] = {
+            "score": round(score, 4),
+            "normalized": round((score + 1) * 50, 1),
+            "market_count": counts.get(cat, 0),
+        }
     return sub
 
 
@@ -117,16 +153,15 @@ def export_latest(db: Database, sector: str) -> dict:
     if not latest_date:
         return {}
 
-    all_markets = db.get_market_snapshots(latest_date)
-    sub_scores = _compute_sub_scores(all_markets)
+    all_markets = db.get_market_snapshots(latest_date, sector=sector)
+    # Find latest sector row
+    sector_rows = db.get_sector_timeseries(sector, start=latest_date, end=latest_date)
+    sector_row = sector_rows[0] if sector_rows else {}
+    sub_scores = _format_stored_sub_scores(sector_row, all_markets, sector)
     by_asset = _compute_by_asset(all_markets)
 
     # Sort by weight desc and cap for per-market output
     markets_raw = sorted(all_markets, key=lambda m: m["weight"], reverse=True)[:MAX_MARKETS]
-
-    # Find latest sector row
-    sector_rows = db.get_sector_timeseries(sector, start=latest_date, end=latest_date)
-    sector_row = sector_rows[0] if sector_rows else {}
 
     # Reference price for today
     ref_prices = db.get_reference_prices(start=latest_date, end=latest_date)
@@ -190,6 +225,7 @@ def _build_category_case_sql() -> str:
             WHEN classification = 'favors_incumbent' THEN 'favors_incumbent'
             WHEN classification = 'favors_challenger' THEN 'favors_challenger'
             WHEN classification IN ('legislative_positive','legislative_negative') THEN 'legislative'
+            WHEN classification = 'judicial_event' THEN 'judicial'
             WHEN classification = 'geopolitical_event' THEN 'geopolitical'
             ELSE 'other'
         END
@@ -204,7 +240,7 @@ def export_sandbox(db: Database, sector: str = "crypto") -> dict:
     # Category-level aggregates (existing behavior)
     # For non-crypto sectors, allow asset='OTHER' since many markets won't match
     # specific asset patterns (e.g. politics markets have no financial asset)
-    sector_filter = f"AND sector = {ph}" if sector != "crypto" else ""
+    sector_filter = f"AND sector = {ph}"
     # Exclude crypto tickers from non-crypto sectors (historical misclassification)
     _CRYPTO_TICKERS = ('BTC','ETH','SOL','XRP','ADA','DOGE','AVAX','DOT','LINK','MATIC','UNI','LTC','ATOM','NEAR','SUI')
     crypto_exclude = ""
@@ -215,7 +251,7 @@ def export_sandbox(db: Database, sector: str = "crypto") -> dict:
         base_filter = f"WHERE asset != 'OTHER' {sector_filter}"
     else:
         base_filter = f"WHERE 1=1 {sector_filter} {crypto_exclude}"
-    params = [sector] if sector != "crypto" else []
+    params = [sector]
     if sector != "crypto":
         params.extend(_CRYPTO_TICKERS)
 
@@ -347,6 +383,73 @@ def _write_json(path: Path, data):
     log.info("Wrote %s (%.1f KB)", path.name, size_kb)
 
 
+def _read_existing_meta(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _safe_json_obj(value) -> dict:
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return value if isinstance(value, dict) else {}
+
+
+def build_export_meta(
+    *,
+    output: Path,
+    db: Database,
+    sector: str,
+    latest_data: dict,
+    sandbox_data: dict,
+    generated_at: str,
+    latest_name: str,
+    sandbox_name: str,
+) -> dict:
+    """Merge this export into the public production metadata file."""
+    meta = _read_existing_meta(output / "meta.json")
+    meta.update(scoring_metadata())
+    meta["generated_at"] = generated_at
+    meta["data_source"] = "Polymarket Gamma & CLOB APIs plus reference market data feeds"
+    meta["update_frequency"] = "Daily scheduled pipeline"
+    sectors = meta.get("sectors") if isinstance(meta.get("sectors"), dict) else {}
+    sectors[sector] = {
+        "status": "ok" if latest_data.get("date") else "empty",
+        "latest_date": latest_data.get("date"),
+        "generated_at": generated_at,
+        "scoring_version": SCORING_VERSION,
+        "market_count": latest_data.get("market_count", 0),
+        "sandbox_assets": len(sandbox_data.get("assets", {})),
+        "files": {
+            "latest": f"data/{latest_name}",
+            "sandbox": f"data/{sandbox_name}",
+        },
+    }
+    meta["sectors"] = sectors
+
+    runs = []
+    try:
+        for row in db.get_pipeline_status(limit=12):
+            item = dict(row)
+            item["summary"] = _safe_json_obj(item.pop("summary_json", None))
+            runs.append(item)
+    except Exception as exc:
+        log.debug("Pipeline run metadata unavailable: %s", exc)
+    if runs:
+        meta["pipeline_runs"] = runs
+
+    return meta
+
+
 @click.command()
 @click.option("--db", "db_path", default=None, help="Database path")
 @click.option("--out", "out_dir", default=None, help="Output directory")
@@ -385,6 +488,17 @@ def main(db_path: str | None, out_dir: str | None, sector: str, verbose: bool):
 
     _write_json(output / latest_name, latest_data)
     _write_json(output / sandbox_name, sandbox_data)
+    meta = build_export_meta(
+        output=output,
+        db=db,
+        sector=sector,
+        latest_data=latest_data,
+        sandbox_data=sandbox_data,
+        generated_at=now,
+        latest_name=latest_name,
+        sandbox_name=sandbox_name,
+    )
+    _write_json(output / "meta.json", meta)
 
     click.echo(f"\nExported to {output}/")
     click.echo(f"  {latest_name} — {latest_data.get('date', '?')}, {len(latest_data.get('markets', []))} markets")

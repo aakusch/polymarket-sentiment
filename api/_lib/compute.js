@@ -7,6 +7,27 @@ const SECTOR_CATEGORIES = {
   economy: ['monetary_policy', 'inflation', 'growth', 'employment'],
 };
 
+const SECTOR_DEFAULT_REFERENCE_ASSET = {
+  crypto: 'btc_price',
+  stocks: 'spx_price',
+  economy: 'us10y_yield',
+  politics: null,
+};
+
+function hasOwn(obj, key) {
+  return Object.prototype.hasOwnProperty.call(obj || {}, key);
+}
+
+function resolveReferenceAsset(indicator, weightsConfig = {}) {
+  const sectorId = indicator?.sector || 'crypto';
+  if (hasOwn(indicator, 'referenceAsset')) return indicator.referenceAsset;
+  if (hasOwn(indicator, 'reference_asset')) return indicator.reference_asset;
+  if (hasOwn(weightsConfig, 'referenceAsset')) return weightsConfig.referenceAsset;
+  if (hasOwn(weightsConfig, 'reference_asset')) return weightsConfig.reference_asset;
+  if (hasOwn(SECTOR_DEFAULT_REFERENCE_ASSET, sectorId)) return SECTOR_DEFAULT_REFERENCE_ASSET[sectorId];
+  return 'btc_price';
+}
+
 /**
  * Compute indicator timeseries server-side from market_snapshots table.
  * Supports both market-mode (indicator.markets) and legacy category-mode (indicator.weights).
@@ -15,12 +36,14 @@ const SECTOR_CATEGORIES = {
 async function computeIndicator(indicator) {
   const sql = getDb();
   const asset = indicator.asset || 'BTC';
-  const referenceAsset = indicator.referenceAsset || null; // cross-sector "Test Against"
+  const weightsConfig = indicator.weights || {};
+  const sectorId = indicator.sector || 'crypto';
+  const referenceAsset = resolveReferenceAsset(indicator, weightsConfig);
   const fgEnabled = indicator.fg_enabled ?? indicator.fgEnabled ?? false;
   const fgWeight = (indicator.fg_weight ?? indicator.fgWeight ?? 30) / 100;
 
   // Detect mode: market-mode if indicator has markets field
-  const rawMarkets = indicator.markets || (indicator.weights?.markets) || null;
+  const rawMarkets = indicator.markets || weightsConfig.markets || null;
   const isMarketMode = !!rawMarkets && typeof rawMarkets === 'object' && !Array.isArray(rawMarkets)
     && Object.keys(rawMarkets).length > 0;
 
@@ -57,7 +80,7 @@ async function computeIndicator(indicator) {
       : await sql`
           SELECT date, market_id, sentiment_signal, weight
           FROM market_snapshots
-          WHERE asset = ${asset} AND market_id = ANY(${marketIds})
+          WHERE sector = ${sectorId} AND asset = ${asset} AND market_id = ANY(${marketIds})
           ORDER BY date
         `;
 
@@ -97,7 +120,7 @@ async function computeIndicator(indicator) {
         SUM(weight) as wt,
         COUNT(*) as n
       FROM market_snapshots
-      WHERE asset = ${asset}
+      WHERE sector = ${sectorId} AND asset = ${asset}
       GROUP BY date, cat
       ORDER BY date
     `;
@@ -126,7 +149,7 @@ async function computeIndicator(indicator) {
   }
 
   // Determine which reference key to use for price overlay
-  const refPriceKey = referenceAsset || (asset === 'BTC' ? 'btc_price' : 'btc_price');
+  const refPriceKey = referenceAsset;
 
   const dates = [...allDates].sort();
   const scores = [];
@@ -161,9 +184,8 @@ async function computeIndicator(indicator) {
       fgValues.push(fg);
     }
   } else {
-    const weights = indicator.weights || {};
+    const weights = weightsConfig || {};
     const includeOther = indicator.include_other ?? indicator.includeOther ?? false;
-    const sectorId = indicator.sector || 'crypto';
     const catKeys = [...(SECTOR_CATEGORIES[sectorId] || SECTOR_CATEGORIES.crypto)];
     if (includeOther) catKeys.push('other');
 
@@ -217,6 +239,8 @@ async function computeIndicator(indicator) {
     config: {
       name: indicator.name,
       asset,
+      sector: sectorId,
+      referenceAsset,
       ...(isMarketMode
         ? { markets, marketCount: Object.keys(markets).length }
         : { weights: indicator.weights || {}, includeOther: indicator.include_other ?? indicator.includeOther ?? false }),
@@ -227,19 +251,20 @@ async function computeIndicator(indicator) {
 }
 
 /**
- * Compute Predictive Score: how well indicator scores frontrun reference asset moves.
- * Cross-correlates at multiple lag offsets, returns { score, peakCorrelation, optimalLag } or null.
+ * Compute Predictive Score: how well indicator scores lead future reference returns.
+ * Cross-correlates against forward returns at multiple lags and only rewards
+ * positive signed correlation, returning { score, peakCorrelation, optimalLag }.
  */
 function computePredictiveScore(scores, prices) {
   const lags = [1, 2, 3, 5, 7, 14, 21, 30];
-  let peakR = 0;
-  let peakLag = 0;
+  let bestPositive = null;
+  let strongestInverse = null;
 
   for (const lag of lags) {
     const pairs = [];
     for (let i = 0; i < scores.length - lag; i++) {
-      if (scores[i] != null && prices[i + lag] != null) {
-        pairs.push([scores[i], prices[i + lag]]);
+      if (scores[i] != null && prices[i] != null && prices[i + lag] != null && prices[i] > 0) {
+        pairs.push([scores[i], prices[i + lag] / prices[i] - 1]);
       }
     }
     if (pairs.length < 10) continue;
@@ -257,20 +282,25 @@ function computePredictiveScore(scores, prices) {
     const den = Math.sqrt(dx2 * dy2);
     const r = den > 0 ? num / den : 0;
 
-    if (Math.abs(r) > Math.abs(peakR)) {
-      peakR = r;
-      peakLag = lag;
+    if (r > 0 && (!bestPositive || r > bestPositive.r)) {
+      bestPositive = { r, lag };
+    }
+    if (r < 0 && (!strongestInverse || Math.abs(r) > Math.abs(strongestInverse.r))) {
+      strongestInverse = { r, lag };
     }
   }
 
-  if (peakLag === 0 && peakR === 0) return null;
+  const selected = bestPositive || strongestInverse;
+  if (!selected) return null;
 
-  const score = Math.round(Math.abs(peakR) * 100 * 0.7 + (1 - peakLag / 30) * 100 * 0.3);
+  const positiveR = Math.max(0, selected.r);
+  const lagMultiplier = 0.7 + (1 - selected.lag / 30) * 0.3;
+  const score = Math.round(positiveR * 100 * lagMultiplier);
   return {
     score: Math.max(0, Math.min(100, score)),
-    peakCorrelation: Math.round(peakR * 1000) / 1000,
-    optimalLag: peakLag,
+    peakCorrelation: Math.round(selected.r * 1000) / 1000,
+    optimalLag: selected.lag,
   };
 }
 
-module.exports = { computeIndicator, computePredictiveScore };
+module.exports = { computeIndicator, computePredictiveScore, resolveReferenceAsset };

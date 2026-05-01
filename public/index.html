@@ -4,16 +4,76 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Polymarket Sentiment Indicators</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/og-default.png">
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
   <script src="https://unpkg.com/@solana/web3.js@1/lib/index.iife.min.js"></script>
   <style>
-    body { font-family: system-ui, -apple-system, sans-serif; }
+    :root {
+      --app-bg: #0f1117;
+      --surface: rgba(17, 24, 39, 0.72);
+      --surface-strong: rgba(21, 27, 38, 0.92);
+      --line: rgba(75, 85, 99, 0.42);
+    }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      text-rendering: optimizeLegibility;
+      background:
+        linear-gradient(180deg, rgba(17, 24, 39, 0.84) 0, var(--app-bg) 260px),
+        var(--app-bg);
+    }
+    button:disabled { cursor: not-allowed; opacity: 0.62; }
+    button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible {
+      outline: 2px solid rgba(96,165,250,0.72);
+      outline-offset: 2px;
+    }
     .tabular-nums { font-variant-numeric: tabular-nums; }
     .page { display: none; }
     .page.active { display: block; }
-    .nav-link { transition: color 0.15s, border-color 0.15s; }
+    .nav-link { transition: color 0.15s, border-color 0.15s, background 0.15s; }
     .nav-link.active { color: #e5e7eb; border-bottom-color: #60a5fa; }
+    .brand-mark {
+      width: 20px; height: 20px; border-radius: 7px;
+      display: inline-flex; align-items: center; justify-content: center;
+      background: #111827; border: 1px solid rgba(96,165,250,.34);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.05);
+    }
+    .brand-mark::before {
+      content: ""; width: 10px; height: 7px; border-left: 2px solid #f97316;
+      border-bottom: 2px solid #2dd4bf; transform: skew(-18deg) rotate(-8deg);
+    }
+    .app-surface {
+      background: linear-gradient(180deg, rgba(31,41,55,.34), rgba(17,24,39,.42));
+      border: 1px solid var(--line);
+      box-shadow: 0 18px 40px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.03);
+    }
+    .data-status {
+      min-height: 28px;
+      background: rgba(17,24,39,.78);
+      border: 1px solid rgba(75,85,99,.62);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.035);
+    }
+    .sync-btn {
+      min-height: 28px;
+      background: rgba(31,41,55,.72);
+      border: 1px solid rgba(75,85,99,.58);
+    }
+    .sync-btn:hover { border-color: rgba(96,165,250,.58); color: #93c5fd; }
+    .sector-chip {
+      display: inline-flex; align-items: center; height: 17px; padding: 0 6px;
+      border-radius: 5px; background: rgba(96,165,250,.09);
+      border: 1px solid rgba(96,165,250,.12);
+      color: #8aa8d8; font-size: 9px; line-height: 1;
+      letter-spacing: .08em; text-transform: uppercase; white-space: nowrap;
+    }
+    .loading-line {
+      height: 11px; border-radius: 999px;
+      background: linear-gradient(90deg, rgba(55,65,81,.45), rgba(75,85,99,.28), rgba(55,65,81,.45));
+      background-size: 200% 100%;
+      animation: shimmer 1.25s ease-in-out infinite;
+    }
+    @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
     .sparkline { display: inline-block; vertical-align: middle; }
     input[type=range] { -webkit-appearance: none; background: transparent; }
     input[type=range]::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: #374151; }
@@ -22,11 +82,11 @@
     input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; border: 0; cursor: pointer; }
     details summary::-webkit-details-marker { display: none; }
     details summary { list-style: none; }
-    .ind-table { width: 100%; border-collapse: separate; border-spacing: 0; }
+    .ind-table { width: 100%; min-width: 680px; border-collapse: separate; border-spacing: 0; }
     .ind-table th, .ind-table td { text-align: left; white-space: nowrap; }
     .ind-table tbody tr { border-bottom: 1px solid rgba(75,85,99,0.15); transition: background 0.15s, transform 0.15s; }
     .ind-table tbody tr:last-child { border-bottom: none; }
-    .ind-table tbody tr:hover { background: rgba(96,165,250,0.04); }
+    .ind-table tbody tr:hover { background: rgba(96,165,250,0.055); }
     /* Row stagger animation */
     @keyframes rowFadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
     .ind-row-anim { animation: rowFadeIn 0.3s ease-out both; }
@@ -46,7 +106,7 @@
     .view-toggle button { padding: 4px 12px; border-radius: 6px; font-size: 11px; transition: all 0.2s; color: #9ca3af; }
     .view-toggle button.active { background: rgba(96,165,250,0.15); color: #93c5fd; }
     /* Stat pill in cards */
-    .stat-pill { display: inline-flex; align-items: center; gap: 3px; padding: 3px 9px; border-radius: 6px; font-size: 11px; font-variant-numeric: tabular-nums; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); color: #d1d5db; }
+    .stat-pill { display: inline-flex; align-items: center; gap: 3px; padding: 3px 9px; border-radius: 6px; font-size: 11px; font-variant-numeric: tabular-nums; background: rgba(255,255,255,0.035); border: 1px solid rgba(255,255,255,0.06); color: #d1d5db; }
     /* Custom scrollbar for market picker */
     #builder-market-picker::-webkit-scrollbar { width: 4px; }
     #builder-market-picker::-webkit-scrollbar-track { background: transparent; }
@@ -72,22 +132,31 @@
       z-index: 50; margin-bottom: 6px;
     }
     .bt-tip:hover::after { opacity: 1; }
+    @media (max-width: 720px) {
+      .nav-link { padding-left: .6rem; padding-right: .6rem; }
+      #nav-score .data-status span:nth-child(2) { display: none; }
+      #nav-score .sync-btn span { display: none; }
+    }
+    @media (max-width: 560px) {
+      #nav-score .data-status { display: none; }
+    }
   </style>
 </head>
 <body class="bg-[#0f1117] text-gray-100 min-h-screen">
 
   <!-- Top Navigation -->
-  <nav class="sticky top-0 z-50 bg-[#0f1117]/95 backdrop-blur border-b border-gray-700/40">
+  <nav class="sticky top-0 z-50 bg-[#0f1117]/92 backdrop-blur border-b border-gray-700/40">
     <div class="max-w-7xl mx-auto px-4">
-      <div class="flex items-center justify-between h-14">
-        <div class="flex items-center gap-1">
-          <span class="text-sm font-semibold text-gray-300 mr-4 hidden sm:inline">PMSI</span>
+      <div class="flex items-center justify-between min-h-14 gap-3">
+        <div class="flex flex-1 items-center gap-1 min-w-0 overflow-x-auto">
+          <span class="brand-mark mr-2 hidden sm:inline-flex" aria-hidden="true"></span>
+          <span class="text-sm font-semibold text-gray-300 mr-4 hidden md:inline">PMSI</span>
           <a href="#indicators" data-nav="indicators" class="nav-link px-3 py-4 text-sm text-gray-500 border-b-2 border-transparent hover:text-gray-300">Indicators</a>
           <a href="#builder" data-nav="builder" class="nav-link px-3 py-4 text-sm text-gray-500 border-b-2 border-transparent hover:text-gray-300">Builder</a>
           <a href="#api" data-nav="api" class="nav-link px-3 py-4 text-sm text-gray-500 border-b-2 border-transparent hover:text-gray-300">API</a>
           <a href="#docs" data-nav="docs" class="nav-link px-3 py-4 text-sm text-gray-500 border-b-2 border-transparent hover:text-gray-300">Docs</a>
         </div>
-        <div class="flex items-center gap-3">
+        <div class="flex items-center gap-2 sm:gap-3 shrink-0">
           <div id="nav-score" class="text-sm tabular-nums text-gray-500"></div>
           <div id="auth-area"></div>
         </div>
@@ -95,7 +164,7 @@
     </div>
   </nav>
 
-  <div class="max-w-7xl mx-auto px-6 py-8">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
 
     <!-- INDICATORS PAGE -->
     <div id="page-indicators" class="page space-y-6">
@@ -130,7 +199,7 @@
       <div id="indicators-sectors"></div>
 
       <!-- Comparison overlay chart -->
-      <div id="comparison-panel" class="hidden mt-6 bg-gray-800/40 rounded-2xl p-6 border border-gray-700/40">
+      <div id="comparison-panel" class="hidden mt-6 app-surface rounded-xl p-6">
         <div class="flex items-center justify-between mb-3">
           <h3 class="text-sm font-medium text-gray-300">Indicator Comparison</h3>
           <button onclick="comparisonState.selected.clear(); updateComparisonUI();" class="text-xs text-gray-500 hover:text-gray-300">Clear</button>
@@ -146,6 +215,32 @@
 
     <!-- BUILDER PAGE -->
     <div id="page-builder" class="page">
+
+      <div id="builder-choice" class="max-w-4xl mx-auto py-8 sm:py-14">
+        <div class="mb-7">
+          <h1 class="text-2xl font-semibold text-gray-100 mb-2">Builder</h1>
+          <p class="text-sm text-gray-500">Choose a clean draft or use an existing indicator as your starting point.</p>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <button onclick="startNewBuilder()" class="group app-surface rounded-xl p-6 text-left hover:border-blue-500/45 transition-all">
+            <div class="w-10 h-10 rounded-lg bg-blue-600/15 border border-blue-500/25 text-blue-300 flex items-center justify-center mb-5 group-hover:bg-blue-600/25 transition-colors">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+            </div>
+            <div class="text-base font-semibold text-gray-100 mb-1">Start New Build</div>
+            <div class="text-sm text-gray-500 leading-relaxed">Open a blank builder with no selected markets and default backtest settings.</div>
+          </button>
+
+          <button onclick="openForkIndicatorModal()" class="group app-surface rounded-xl p-6 text-left hover:border-green-500/45 transition-all">
+            <div class="w-10 h-10 rounded-lg bg-green-600/15 border border-green-500/25 text-green-300 flex items-center justify-center mb-5 group-hover:bg-green-600/25 transition-colors">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M4 4h10v10H4zM10 10h10v10H10z"/></svg>
+            </div>
+            <div class="text-base font-semibold text-gray-100 mb-1">Fork Existing Build</div>
+            <div class="text-sm text-gray-500 leading-relaxed">Search public and saved indicators, then copy one into a new editable draft.</div>
+          </button>
+        </div>
+      </div>
+
+      <div id="builder-workspace" class="hidden">
 
       <!-- Top bar: Name + Save -->
       <div class="flex items-center gap-3 mb-5">
@@ -194,7 +289,7 @@
         <div class="space-y-6">
 
           <!-- Chart -->
-          <div class="bg-gray-800/40 rounded-xl p-6 border border-gray-700/40">
+          <div class="app-surface rounded-xl p-6">
             <div class="flex items-center justify-between mb-3">
               <div id="builder-metrics" class="flex items-center gap-4"></div>
               <div class="flex gap-1">
@@ -214,7 +309,7 @@
           <span id="builder-chart-ref-label" class="hidden">BTC Price</span>
 
           <!-- Backtest Panel -->
-          <div id="backtest-panel" class="bg-gray-800/40 rounded-xl border border-gray-700/40 p-6">
+          <div id="backtest-panel" class="app-surface rounded-xl p-6">
             <div class="flex items-center justify-between mb-4">
               <h3 class="text-sm font-medium text-gray-300">Backtest</h3>
               <div class="flex items-center gap-3">
@@ -285,7 +380,7 @@
         </div>
 
         <!-- Right: Market Picker -->
-        <div class="flex flex-col bg-gray-800/40 rounded-xl border border-gray-700/40 overflow-hidden" style="max-height: calc(100vh - 120px)">
+        <div class="flex flex-col app-surface rounded-xl overflow-hidden" style="max-height: calc(100vh - 120px)">
 
           <!-- Selected basket summary -->
           <div id="builder-basket" class="shrink-0 px-3 pt-3 pb-2"></div>
@@ -325,6 +420,7 @@
           <div id="builder-market-picker" class="flex-1 overflow-y-auto p-3 space-y-2.5"></div>
         </div>
 
+      </div>
       </div>
     </div>
 
@@ -384,6 +480,22 @@
 
       <div id="alert-error" class="text-red-400 text-xs mb-2"></div>
       <button onclick="createAlert()" class="w-full px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-500 transition-colors">Create Alert</button>
+    </div>
+  </div>
+
+  <!-- Fork Indicator Modal -->
+  <div id="fork-modal" class="hidden fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+    <div class="bg-[#1a1d27] rounded-xl border border-gray-600/50 w-full max-w-2xl mx-4 p-5 relative shadow-2xl">
+      <button onclick="closeForkIndicatorModal()" class="absolute top-4 right-4 text-gray-500 hover:text-gray-300 text-xl">&times;</button>
+      <h3 class="text-sm font-semibold text-gray-100 mb-1">Fork Existing Build</h3>
+      <p class="text-xs text-gray-500 mb-4">Search indicators and select one to copy into a new draft.</p>
+      <div class="relative mb-4">
+        <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+        <input type="text" id="fork-search" placeholder="Search by name, sector, creator, or asset…"
+          oninput="renderForkIndicatorResults(this.value)"
+          class="w-full pl-9 pr-3 py-2 text-sm bg-gray-800/60 border border-gray-600/50 rounded-lg text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-500/60">
+      </div>
+      <div id="fork-results" class="max-h-[440px] overflow-y-auto space-y-2"></div>
     </div>
   </div>
 

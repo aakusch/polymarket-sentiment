@@ -1,7 +1,7 @@
-const { getDb } = require('../_lib/db');
+const { getDb, withDatabaseConfigError } = require('../_lib/db');
 const { authenticate } = require('../_lib/auth');
 
-module.exports = async function handler(req, res) {
+module.exports = withDatabaseConfigError(async function handler(req, res) {
   const auth = authenticate(req);
   if (!auth) return res.status(401).json({ error: 'Unauthorized' });
 
@@ -74,4 +74,4 @@ module.exports = async function handler(req, res) {
   }
 
   return res.status(405).json({ error: 'Method not allowed' });
-};
+});

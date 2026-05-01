@@ -6,7 +6,7 @@ async function renderApiPanel() {
 
   if (!authState.token) {
     el.innerHTML = `
-      <div class="bg-gray-900/50 rounded-2xl p-8 border border-gray-800/50 text-center">
+      <div class="app-surface rounded-xl p-8 text-center">
         <div class="text-gray-400 mb-2">Sign in to manage API keys</div>
         <p class="text-gray-500 text-sm mb-4">Create API keys to access indicator data programmatically.</p>
         <button onclick="openAuthModal()" class="px-5 py-2.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-500 transition-colors">Sign In</button>

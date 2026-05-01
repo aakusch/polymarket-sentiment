@@ -1,4 +1,4 @@
-const { getDb } = require('../_lib/db');
+const { getDb, withDatabaseConfigError } = require('../_lib/db');
 const { authenticate } = require('../_lib/auth');
 const { verifyTransaction } = require('../_lib/solana');
 const { ensureBundlePricing } = require('../_lib/migrations');
@@ -6,7 +6,7 @@ const { ensureBundlePricing } = require('../_lib/migrations');
 const PLATFORM_WALLET = process.env.PLATFORM_WALLET;
 const VALID_BUNDLES = [10, 50, 100, 500];
 
-module.exports = async function handler(req, res) {
+module.exports = withDatabaseConfigError(async function handler(req, res) {
   const { action } = req.query;
 
   switch (action) {
@@ -16,7 +16,7 @@ module.exports = async function handler(req, res) {
     case 'verify': return handleVerify(req, res);
     default: return res.status(404).json({ error: 'Not found' });
   }
-};
+});
 
 async function handleBalance(req, res) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });

@@ -21,7 +21,7 @@ from config import (
 )
 from db import Database
 from discovery import Discoverer, Market
-from scorer import MarketScore, SectorScore, _is_noise_market, market_weight
+from scorer import MarketScore, _is_noise_market, market_weight, sector_score_from_market_scores
 
 log = logging.getLogger(__name__)
 
@@ -120,9 +120,6 @@ async def run_backfill(
         for d in dates:
             market_prices = prices_by_date[d]
             market_scores: list[MarketScore] = []
-            weighted_sum = 0.0
-            total_weight = 0.0
-
             for market_id, price in market_prices:
                 market = markets_by_id.get(market_id)
                 cls = classifications.get(market_id)
@@ -139,34 +136,11 @@ async def run_backfill(
                 ms = _score_from_price(market, price, cls.polarity, cls.signal_type, weight,
                                        asset=getattr(cls, "asset", "OTHER"))
                 market_scores.append(ms)
-                weighted_sum += ms.sentiment_signal * ms.weight
-                total_weight += ms.weight
 
             if not market_scores:
                 continue
 
-            composite = weighted_sum / total_weight if total_weight > 0 else 0.0
-            composite = max(-1.0, min(1.0, composite))
-
-            bullish_count = sum(1 for ms in market_scores if ms.sentiment_signal > 0.1)
-            volumes = [ms.volume_24h for ms in market_scores if ms.volume_24h > 0]
-            liquidities = [ms.liquidity for ms in market_scores if ms.liquidity > 0]
-            from statistics import mean as _mean
-            total = sum(volumes)
-            hhi = sum((v / total) ** 2 for v in volumes) if total > 0 else 0.0
-
-            score = SectorScore(
-                composite=composite,
-                composite_normalized=(composite + 1) * 50,
-                market_count=len(market_scores),
-                total_volume_24h=sum(ms.volume_24h for ms in market_scores),
-                total_open_interest=sum(ms.open_interest for ms in market_scores),
-                avg_liquidity=_mean(liquidities) if liquidities else 0.0,
-                bullish_pct=(bullish_count / len(market_scores) * 100),
-                volume_concentration=hhi,
-                sub_scores={},
-                market_scores=market_scores,
-            )
+            score = sector_score_from_market_scores(market_scores, sector=sector)
             db.save_snapshot(d, sector, score)
 
         log.info("Backfill complete: %d dates written", len(dates))

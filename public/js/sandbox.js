@@ -10,19 +10,56 @@ let builderState = {
   chartPeriod: 'ALL',
   editingId: null,
   initialized: false,
+  builderStarted: false,
   marketSearch: '',     // search filter text
   referenceAsset: null, // "Test Against" — key from ALL_REFERENCE_ASSETS (e.g. 'btc_price', 'spx_price', null)
 };
 
 let sparklineCharts = [];
+let builderForkIndicators = [];
 
 // ── Indicator CRUD (API when authed, localStorage fallback) ─────────────────
 
 let _indicatorCache = null;
 
+const DEFAULT_PUBLIC_INDICATORS = [
+  { id: 'demo-btc-sentiment', name: 'BTC Sentiment Index', sector: 'crypto', asset: 'BTC', referenceAsset: 'btc_price', weights: { price_targets: 100, regulatory: 80, adoption: 60, events: 60 }, fgEnabled: false, fgWeight: 30 },
+  { id: 'demo-eth-momentum', name: 'ETH Momentum', sector: 'crypto', asset: 'ETH', referenceAsset: 'eth_price', weights: { price_targets: 200, regulatory: 40, adoption: 80, events: 40 }, fgEnabled: false, fgWeight: 30 },
+  { id: 'demo-crypto-regulatory', name: 'Crypto Regulatory Pulse', sector: 'crypto', asset: 'BTC', referenceAsset: 'btc_price', weights: { price_targets: 30, regulatory: 200, adoption: 40, events: 40 }, fgEnabled: false, fgWeight: 30 },
+  { id: 'demo-crypto-fg', name: 'BTC Fear & Greed Blend', sector: 'crypto', asset: 'BTC', referenceAsset: 'btc_price', weights: { price_targets: 100, regulatory: 60, adoption: 60, events: 60 }, fgEnabled: true, fgWeight: 50 },
+  { id: 'demo-spx-sentiment', name: 'S&P 500 Sentiment', sector: 'stocks', asset: 'SPX', referenceAsset: 'spx_price', weights: { price_targets: 100, earnings: 80, corporate: 60 }, fgEnabled: false, fgWeight: 30 },
+  { id: 'demo-tech-pulse', name: 'Tech Mega-Cap Pulse', sector: 'stocks', asset: 'NDX', referenceAsset: 'ndx_price', weights: { price_targets: 150, earnings: 150, corporate: 40 }, fgEnabled: false, fgWeight: 30 },
+  { id: 'demo-earnings-signal', name: 'Earnings Season Signal', sector: 'stocks', asset: 'SPX', referenceAsset: 'spx_price', weights: { price_targets: 40, earnings: 200, corporate: 80 }, fgEnabled: false, fgWeight: 30 },
+  { id: 'demo-fed-outlook', name: 'Fed Policy Outlook', sector: 'economy', asset: 'RATES', referenceAsset: 'fed_rate', weights: { monetary_policy: 200, inflation: 80, growth: 40, employment: 40 }, fgEnabled: false, fgWeight: 30 },
+  { id: 'demo-recession-watch', name: 'Recession Watch', sector: 'economy', asset: 'GDP', referenceAsset: 'us10y_yield', weights: { monetary_policy: 60, inflation: 60, growth: 200, employment: 150 }, fgEnabled: false, fgWeight: 30 },
+  { id: 'demo-macro-index', name: 'Macro Sentiment Index', sector: 'economy', asset: 'MACRO', referenceAsset: 'us10y_yield', weights: { monetary_policy: 100, inflation: 100, growth: 100, employment: 100 }, fgEnabled: false, fgWeight: 30 },
+  { id: 'demo-election-barometer', name: 'Election Barometer', sector: 'politics', asset: 'GOV', referenceAsset: null, weights: { favors_incumbent: 150, favors_challenger: 150, legislative: 30, judicial: 20, geopolitical: 20 }, fgEnabled: false, fgWeight: 30 },
+  { id: 'demo-policy-impact', name: 'Policy Impact Index', sector: 'politics', asset: 'GOV', referenceAsset: null, weights: { favors_incumbent: 30, favors_challenger: 30, legislative: 150, judicial: 100, geopolitical: 100 }, fgEnabled: false, fgWeight: 30 },
+  { id: 'demo-political-sentiment', name: 'Political Sentiment', sector: 'politics', asset: 'GOV', referenceAsset: null, weights: { favors_incumbent: 100, favors_challenger: 100, legislative: 80, judicial: 60, geopolitical: 60 }, fgEnabled: false, fgWeight: 30 },
+].map(ind => ({
+  ...ind,
+  includeOther: false,
+  isPublic: true,
+  creator: 'PMSI Team',
+  createdAt: '2026-04-08T20:21:53Z',
+  _isOwned: false,
+  _isDefault: true,
+}));
+
+function addDefaultPublicIndicators(results) {
+  const existingIds = new Set(results.map(i => i.id));
+  for (const ind of DEFAULT_PUBLIC_INDICATORS) {
+    if (!existingIds.has(ind.id)) {
+      results.push({ ...ind, weights: { ...ind.weights } });
+      existingIds.add(ind.id);
+    }
+  }
+}
+
 async function getIndicators() {
   if (_indicatorCache) return _indicatorCache;
   const results = [];
+  let publicCount = 0;
   // Fetch user's own indicators if authenticated
   if (authState.token) {
     try {
@@ -40,10 +77,14 @@ async function getIndicators() {
       const data = await res.json();
       const existingIds = new Set(results.map(i => i.id));
       for (const ind of (data.indicators || [])) {
-        if (!existingIds.has(ind.id)) results.push({ ...ind, _isOwned: false });
+        if (!existingIds.has(ind.id)) {
+          results.push({ ...ind, _isOwned: false });
+          publicCount++;
+        }
       }
     }
   } catch (e) { console.error('Failed to fetch public indicators:', e); }
+  if (publicCount === 0) addDefaultPublicIndicators(results);
   // Merge with localStorage
   const local = JSON.parse(localStorage.getItem('pcsi_indicators') || '[]');
   const allIds = new Set(results.map(i => i.id));
@@ -57,7 +98,14 @@ async function getIndicators() {
 // Sync version for non-async callers (builder load menu, edit, etc.)
 function getIndicatorsSync() {
   if (_indicatorCache) return _indicatorCache;
-  return JSON.parse(localStorage.getItem('pcsi_indicators') || '[]');
+  const results = [];
+  addDefaultPublicIndicators(results);
+  const local = JSON.parse(localStorage.getItem('pcsi_indicators') || '[]');
+  const ids = new Set(results.map(i => i.id));
+  for (const ind of local) {
+    if (!ids.has(ind.id)) results.push({ ...ind, _isOwned: true });
+  }
+  return results;
 }
 
 async function saveIndicatorToStorage(indicator) {
@@ -99,11 +147,78 @@ function generateId() {
   return Math.random().toString(36).substr(2, 8);
 }
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+let _marketHistoryIndexCache = null;
+
+function invalidateMarketHistoryIndex() {
+  _marketHistoryIndexCache = null;
+}
+
+function getSectorDefaultReferenceAsset(sectorId) {
+  const sector = typeof SECTORS !== 'undefined' ? SECTORS[sectorId] : null;
+  if (sector?.referenceData && Object.prototype.hasOwnProperty.call(sector.referenceData, 'priceKey')) {
+    return sector.referenceData.priceKey;
+  }
+  return 'btc_price';
+}
+
+function resolveIndicatorReferenceAsset(config, sectorId) {
+  if (Object.prototype.hasOwnProperty.call(config || {}, 'referenceAsset')) return config.referenceAsset;
+  return getSectorDefaultReferenceAsset(sectorId || config?.sector || 'crypto');
+}
+
+function getMarketHistoryIndex() {
+  if (_marketHistoryIndexCache) return _marketHistoryIndexCache;
+
+  const index = {};
+  for (const sId of SECTOR_ORDER) {
+    const ssd = sectorDataCache[sId];
+    if (!ssd?.sandbox?.assets) continue;
+    for (const [asset, ad] of Object.entries(ssd.sandbox.assets)) {
+      const dates = ad.dates || [];
+      for (const [mid, m] of Object.entries(ad.markets || {})) {
+        if (index[mid]) continue;
+        const ssMap = {}, wtMap = {}, activeDates = [];
+        for (let i = 0; i < dates.length; i++) {
+          ssMap[dates[i]] = m.ss?.[i];
+          wtMap[dates[i]] = m.wt?.[i];
+          if (m.ss?.[i] != null || m.wt?.[i] != null) activeDates.push(dates[i]);
+        }
+        index[mid] = {
+          ssMap,
+          wtMap,
+          dates: activeDates,
+          cat: m.cat,
+          q: m.q,
+          prob: m.prob,
+          vol: m.vol,
+          end: m.end,
+          sector: sId,
+          asset,
+        };
+      }
+    }
+  }
+
+  _marketHistoryIndexCache = index;
+  return _marketHistoryIndexCache;
+}
+
 
 // ── Core Computation ─────────────────────────────────────────────────────
 
 function computeIndicatorTimeseries(config, sectorData) {
-  const priceKey = config.referenceAsset || 'btc_price';
+  const sectorId = config.sector || 'crypto';
+  const sector = SECTORS[sectorId];
+  const priceKey = resolveIndicatorReferenceAsset(config, sectorId);
   const fgKey = 'fear_greed';
   // Get refMap from the appropriate sector cache
   const refAssetMeta = typeof ALL_REFERENCE_ASSETS !== 'undefined' ? ALL_REFERENCE_ASSETS.find(a => a.key === priceKey) : null;
@@ -113,29 +228,16 @@ function computeIndicatorTimeseries(config, sectorData) {
   const isMarketMode = !!config.markets && Object.keys(config.markets).length > 0;
 
   if (isMarketMode) {
-    // Build per-market lookups across all sector caches (markets can come from anywhere)
+    // Reuse a cross-sector per-market index so indicator lists do not rescan all data per card.
+    const marketIndex = getMarketHistoryIndex();
     const marketLookups = {};
     const allDatesSet = new Set();
 
     for (const mid of Object.keys(config.markets)) {
-      for (const sId of SECTOR_ORDER) {
-        const ssd = sectorDataCache[sId];
-        if (!ssd?.sandbox?.assets) continue;
-        for (const [asset, ad] of Object.entries(ssd.sandbox.assets)) {
-          if (ad.markets?.[mid]) {
-            const m = ad.markets[mid];
-            const ssMap = {}, wtMap = {};
-            for (let i = 0; i < ad.dates.length; i++) {
-              ssMap[ad.dates[i]] = m.ss[i];
-              wtMap[ad.dates[i]] = m.wt[i];
-              allDatesSet.add(ad.dates[i]);
-            }
-            marketLookups[mid] = { ssMap, wtMap, cat: m.cat };
-            break;
-          }
-        }
-        if (marketLookups[mid]) break;
-      }
+      const lookup = marketIndex[mid];
+      if (!lookup) continue;
+      marketLookups[mid] = lookup;
+      for (const d of lookup.dates) allDatesSet.add(d);
     }
 
     const dates = [...allDatesSet].sort();
@@ -171,7 +273,6 @@ function computeIndicatorTimeseries(config, sectorData) {
 
   // Legacy category-mode fallback
   const data = sectorData?.sandbox;
-  const sector = SECTORS[config.sector || 'crypto'];
   const assetData = data?.assets?.[config.asset];
   if (!assetData || !sector) return { dates: [], scores: [], prices: [], fgValues: [] };
 
@@ -234,28 +335,15 @@ function computeBuilderTimeseries() {
   const fgKey = 'fear_greed';
 
   // Build per-market lookup tables across all loaded data
+  const marketIndex = getMarketHistoryIndex();
   const marketLookups = {};
   const allDatesSet = new Set();
 
   for (const mid of Object.keys(selectedMarkets)) {
-    for (const sId of SECTOR_ORDER) {
-      const ssd = sectorDataCache[sId];
-      if (!ssd?.sandbox?.assets) continue;
-      for (const [asset, ad] of Object.entries(ssd.sandbox.assets)) {
-        if (ad.markets?.[mid]) {
-          const m = ad.markets[mid];
-          const ssMap = {}, wtMap = {};
-          for (let i = 0; i < ad.dates.length; i++) {
-            ssMap[ad.dates[i]] = m.ss[i];
-            wtMap[ad.dates[i]] = m.wt[i];
-            allDatesSet.add(ad.dates[i]);
-          }
-          marketLookups[mid] = { ssMap, wtMap, cat: m.cat };
-          break;
-        }
-      }
-      if (marketLookups[mid]) break;
-    }
+    const lookup = marketIndex[mid];
+    if (!lookup) continue;
+    marketLookups[mid] = lookup;
+    for (const d of lookup.dates) allDatesSet.add(d);
   }
 
   const dates = [...allDatesSet].sort();
@@ -301,9 +389,10 @@ function computeBuilderTimeseries() {
         if (!ml || ml.cat !== cat) continue;
         const ss = ml.ssMap[d], wt = ml.wtMap[d];
         if (ss == null || wt == null) continue;
+        const userW = getMarketWeight(cfg) / 100;
         const sign = isMarketFlipped(cfg) ? -1 : 1;
-        cNum += sign * ss * wt;
-        cDen += wt;
+        cNum += userW * sign * ss * wt;
+        cDen += userW * wt;
       }
       catScores[cat].push(cDen > 0 ? ((cNum / cDen) + 1) * 50 : null);
     }
@@ -336,13 +425,13 @@ function computeCorrelation(xs, ys) {
 
 function computePredictiveScore(scores, prices) {
   const lags = [1, 2, 3, 5, 7, 14, 21, 30];
-  let peakR = 0, peakLag = 0;
+  let bestPositive = null, strongestInverse = null;
 
   for (const lag of lags) {
     const pairs = [];
     for (let i = 0; i < scores.length - lag; i++) {
-      if (scores[i] != null && prices[i + lag] != null) {
-        pairs.push([scores[i], prices[i + lag]]);
+      if (scores[i] != null && prices[i] != null && prices[i + lag] != null && prices[i] > 0) {
+        pairs.push([scores[i], prices[i + lag] / prices[i] - 1]);
       }
     }
     if (pairs.length < 10) continue;
@@ -360,19 +449,24 @@ function computePredictiveScore(scores, prices) {
     const den = Math.sqrt(dx2 * dy2);
     const r = den > 0 ? num / den : 0;
 
-    if (Math.abs(r) > Math.abs(peakR)) {
-      peakR = r;
-      peakLag = lag;
+    if (r > 0 && (!bestPositive || r > bestPositive.r)) {
+      bestPositive = { r, lag };
+    }
+    if (r < 0 && (!strongestInverse || Math.abs(r) > Math.abs(strongestInverse.r))) {
+      strongestInverse = { r, lag };
     }
   }
 
-  if (peakLag === 0 && peakR === 0) return null;
+  const selected = bestPositive || strongestInverse;
+  if (!selected) return null;
 
-  const score = Math.round(Math.abs(peakR) * 100 * 0.7 + (1 - peakLag / 30) * 100 * 0.3);
+  const positiveR = Math.max(0, selected.r);
+  const lagMultiplier = 0.7 + (1 - selected.lag / 30) * 0.3;
+  const score = Math.round(positiveR * 100 * lagMultiplier);
   return {
     score: Math.max(0, Math.min(100, score)),
-    peakCorrelation: Math.round(peakR * 1000) / 1000,
-    optimalLag: peakLag,
+    peakCorrelation: Math.round(selected.r * 1000) / 1000,
+    optimalLag: selected.lag,
   };
 }
 
@@ -475,19 +569,49 @@ function renderSparkline(canvas, indicatorScores, priceScores) {
 // PAGE 1: INDICATORS (Unified flat list across all sectors)
 // ═════════════════════════════════════════════════════════════════════════════
 
-let indicatorViewMode = 'table'; // 'table' | 'card'
-function setIndicatorView(mode) {
-  indicatorViewMode = mode;
+let indicatorViewMode = (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(max-width: 720px)').matches) ? 'card' : 'table';
+function syncIndicatorViewButtons() {
   const tBtn = document.getElementById('ind-view-table');
   const cBtn = document.getElementById('ind-view-card');
-  tBtn?.classList.toggle('active', mode === 'table');
-  cBtn?.classList.toggle('active', mode === 'card');
+  tBtn?.classList.toggle('active', indicatorViewMode === 'table');
+  cBtn?.classList.toggle('active', indicatorViewMode === 'card');
+}
+
+function setIndicatorView(mode) {
+  indicatorViewMode = mode;
+  syncIndicatorViewButtons();
   renderIndicatorsPage();
+}
+
+function renderIndicatorLoading() {
+  const rows = Array.from({ length: 7 }).map((_, i) => `
+    <div class="grid grid-cols-[44px_58px_1fr_80px] items-center gap-4 px-5 py-4 border-t border-gray-700/20" style="animation-delay:${i * 45}ms">
+      <div class="w-3.5 h-3.5 rounded bg-gray-700/60"></div>
+      <div class="w-11 h-11 rounded-full bg-gray-800/80 border border-gray-700/40"></div>
+      <div class="space-y-2 min-w-0">
+        <div class="loading-line w-48 max-w-full"></div>
+        <div class="loading-line w-32 max-w-[70%] opacity-70"></div>
+      </div>
+      <div class="hidden sm:block loading-line w-16 justify-self-end opacity-60"></div>
+    </div>
+  `).join('');
+  return `
+    <div class="app-surface rounded-xl overflow-hidden" aria-label="Loading indicators">
+      <div class="grid grid-cols-[44px_58px_1fr_80px] items-center gap-4 px-5 py-3 text-[11px] text-gray-600 uppercase tracking-wider">
+        <span></span><span>Score</span><span>Indicator</span><span class="hidden sm:block text-right">Stats</span>
+      </div>
+      ${rows}
+    </div>`;
 }
 
 async function renderIndicatorsPage() {
   const container = document.getElementById('indicators-sectors');
   if (!container) return;
+  syncIndicatorViewButtons();
+  if (!container.dataset.ready) {
+    container.setAttribute('aria-busy', 'true');
+    container.innerHTML = renderIndicatorLoading();
+  }
 
   // Destroy old sparklines
   sparklineCharts.forEach(c => c.destroy());
@@ -548,7 +672,7 @@ async function renderIndicatorsPage() {
 
   if (ranked.length === 0) {
     container.innerHTML = `
-      <div class="bg-gray-800/30 rounded-2xl p-12 border border-gray-700/30 border-dashed text-center">
+      <div class="app-surface rounded-xl p-12 border-dashed text-center">
         <div class="w-12 h-12 mx-auto mb-4 rounded-full bg-gray-800/60 flex items-center justify-center">
           <svg class="w-6 h-6 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
         </div>
@@ -559,6 +683,8 @@ async function renderIndicatorsPage() {
           Build Indicator
         </a>
       </div>`;
+    container.dataset.ready = 'true';
+    container.removeAttribute('aria-busy');
     return;
   }
 
@@ -567,6 +693,8 @@ async function renderIndicatorsPage() {
   } else {
     container.innerHTML = renderIndicatorTableUnified(ranked);
   }
+  container.dataset.ready = 'true';
+  container.removeAttribute('aria-busy');
 
   // Render sparklines after DOM update
   requestAnimationFrame(async () => {
@@ -639,7 +767,7 @@ function renderIndicatorTableUnified(ranked) {
   const svgFork = '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 4h10v10H4zM10 10h10v10H10z"/></svg>';
 
   let html = `
-    <div class="bg-gray-800/30 rounded-2xl border border-gray-700/30 overflow-hidden">
+    <div class="app-surface rounded-xl overflow-x-auto">
       <table class="ind-table text-xs">
         <thead>
           <tr class="text-[11px] text-gray-500 uppercase tracking-wider font-medium" style="background:rgba(255,255,255,0.015)">
@@ -667,7 +795,7 @@ function renderIndicatorTableUnified(ranked) {
     const escapedName = ind.name.replace(/'/g, "\\'");
     const marketCount = ind.markets ? Object.keys(ind.markets).length : 0;
     const label = lastScore != null ? scoreLabel(lastScore) : '';
-    const sectorTag = (ind.sector && ind.sector !== 'crypto') ? `<span class="text-[9px] uppercase tracking-wide text-gray-600 bg-gray-800/60 px-1.5 py-0.5 rounded ml-1.5">${ind.sector}</span>` : '';
+    const sectorTag = (ind.sector && ind.sector !== 'crypto') ? `<span class="sector-chip shrink-0">${SECTORS[ind.sector]?.label || ind.sector}</span>` : '';
 
     html += `
           <tr class="group ind-row-anim cursor-pointer" style="animation-delay:${idx * 40}ms" onclick="location.hash='#indicator?id=${ind.id}'">
@@ -682,7 +810,10 @@ function renderIndicatorTableUnified(ranked) {
               <div class="flex items-center gap-3">
                 <div class="hidden sm:block h-8 w-[80px] shrink-0"><canvas id="spark-${ind.id}"></canvas></div>
                 <div class="min-w-0">
-                  <div class="text-[13px] text-gray-100 font-medium leading-tight truncate">${ind.name}${sectorTag}</div>
+                  <div class="flex items-center gap-2 min-w-0">
+                    <span class="text-[13px] text-gray-100 font-medium leading-tight truncate">${ind.name}</span>
+                    ${sectorTag}
+                  </div>
                   <div class="flex items-center gap-2 mt-0.5">
                     ${!ind._isOwned && ind.creator ? `<span class="text-[10px] text-gray-500">by ${ind.creator}</span>` : ''}
                     ${marketCount > 0 ? `<span class="text-[10px] text-gray-500">${marketCount} markets</span>` : ''}
@@ -743,10 +874,10 @@ function renderIndicatorCards(ranked) {
     const marketCount = ind.markets ? Object.keys(ind.markets).length : 0;
     const escapedName = ind.name.replace(/'/g, "\\'");
     const label = lastScore != null ? scoreLabel(lastScore) : '';
-    const sectorTag = (ind.sector && ind.sector !== 'crypto') ? `<span class="text-[9px] uppercase tracking-wide text-gray-500 bg-gray-700/40 px-1.5 py-0.5 rounded">${ind.sector}</span>` : '';
+    const sectorTag = (ind.sector && ind.sector !== 'crypto') ? `<span class="sector-chip">${SECTORS[ind.sector]?.label || ind.sector}</span>` : '';
 
     html += `
-      <div class="group ind-card-anim bg-gray-800/30 rounded-xl border border-gray-700/30 hover:border-gray-600/50 transition-all duration-200 hover:bg-gray-800/50 hover:shadow-lg hover:shadow-black/20 overflow-hidden flex flex-col cursor-pointer" style="animation-delay:${idx * 50}ms" onclick="location.hash='#indicator?id=${ind.id}'">
+      <div class="group ind-card-anim app-surface rounded-xl hover:border-gray-600/60 transition-all duration-200 hover:bg-gray-800/50 hover:shadow-lg hover:shadow-black/20 overflow-hidden flex flex-col cursor-pointer" style="animation-delay:${idx * 50}ms" onclick="location.hash='#indicator?id=${ind.id}'">
         <div class="p-5 pb-3 flex items-start gap-4">
           ${scoreRingSvg(lastScore, sColor)}
           <div class="flex-1 min-w-0">
@@ -754,7 +885,7 @@ function renderIndicatorCards(ranked) {
             <div class="flex items-center gap-2 mt-1 flex-wrap">
               ${!ind._isOwned && ind.creator ? `<span class="text-[10px] text-gray-500">by ${ind.creator}</span>` : ''}
               ${sectorTag}
-              <span class="text-[10px] text-gray-500">${marketCount} market${marketCount !== 1 ? 's' : ''}</span>
+              ${marketCount > 0 ? `<span class="text-[10px] text-gray-500">${marketCount} market${marketCount !== 1 ? 's' : ''}</span>` : ''}
               ${ind.fgEnabled ? '<span class="text-[10px] text-green-500/80">F&G</span>' : ''}
               ${label ? `<span class="text-[10px] text-gray-600">${label}</span>` : ''}
             </div>
@@ -790,6 +921,7 @@ function renderIndicatorCards(ranked) {
 async function editIndicator(id) {
   const ind = (await getIndicators()).find(i => i.id === id);
   if (!ind) return;
+  builderState.builderStarted = true;
   builderState.editingId = id;
   builderState.fgEnabled = ind.fgEnabled || false;
   builderState.fgWeight = ind.fgWeight || 30;
@@ -815,11 +947,13 @@ async function forkIndicator(id) {
 
 function forkFromData(ind, sourceId) {
   builderState.editingId = null;
+  builderState.builderStarted = true;
   builderState._pendingName = (ind.name || 'Indicator') + ' (fork)';
   builderState._pendingForkedFrom = sourceId;
+  builderState._pendingForkSource = JSON.parse(JSON.stringify(ind));
   builderState.fgEnabled = ind.fgEnabled || false;
   builderState.fgWeight = ind.fgWeight || 30;
-  builderState.referenceAsset = ind.referenceAsset || null;
+  builderState.referenceAsset = ind.referenceAsset ?? SECTORS[ind.sector || 'crypto']?.referenceData?.priceKey ?? null;
   builderState.initialized = false;
 
   if (ind.markets) {
@@ -827,10 +961,15 @@ function forkFromData(ind, sourceId) {
       ? JSON.parse(JSON.stringify(ind.markets))
       : {};
   } else if (ind.weights) {
-    builderState.selectedMarkets = {};
+    copyIndicatorMarketsToBuilder(ind);
   }
 
-  location.hash = '#builder';
+  if ((location.hash || '').split('?')[0] === '#builder') {
+    if (location.hash !== '#builder') history.replaceState(null, '', '#builder');
+    renderBuilderPage();
+  } else {
+    location.hash = '#builder';
+  }
 }
 
 async function confirmDeleteIndicator(id) {
@@ -851,6 +990,181 @@ async function confirmDeleteIndicator(id) {
 
 let detailChartInstance = null;
 
+function localEngagementKey(id) {
+  return 'pmsi_indicator_engagement_' + id;
+}
+
+function getLocalIndicatorEngagement(id) {
+  try {
+    return JSON.parse(localStorage.getItem(localEngagementKey(id)) || '{"viewCount":0,"comments":[]}');
+  } catch (_) {
+    return { viewCount: 0, comments: [] };
+  }
+}
+
+function saveLocalIndicatorEngagement(id, data) {
+  localStorage.setItem(localEngagementKey(id), JSON.stringify({
+    viewCount: data.viewCount || 0,
+    comments: Array.isArray(data.comments) ? data.comments.slice(0, 50) : [],
+  }));
+}
+
+async function recordIndicatorView(id, ind) {
+  const viewedKey = 'pmsi_viewed_indicator_' + id;
+  const alreadyViewed = sessionStorage.getItem(viewedKey);
+  const local = getLocalIndicatorEngagement(id);
+  let viewCount = ind.viewCount || local.viewCount || 0;
+  if (alreadyViewed) return viewCount;
+
+  sessionStorage.setItem(viewedKey, '1');
+  try {
+    const res = await fetch('/api/indicators/' + id + '/view', { method: 'POST' });
+    if (res.ok) {
+      const data = await res.json();
+      return data.viewCount ?? viewCount;
+    }
+  } catch (_) {}
+
+  local.viewCount = Math.max(viewCount, local.viewCount || 0) + 1;
+  saveLocalIndicatorEngagement(id, local);
+  return local.viewCount;
+}
+
+async function loadIndicatorComments(id) {
+  try {
+    const res = await fetch('/api/indicators/' + id + '/comments');
+    if (res.ok) {
+      const data = await res.json();
+      return Array.isArray(data.comments) ? data.comments : [];
+    }
+  } catch (_) {}
+  return getLocalIndicatorEngagement(id).comments || [];
+}
+
+function renderIndicatorComments(id, comments) {
+  const el = document.getElementById('indicator-comments-list');
+  const countEl = document.getElementById('indicator-comment-count');
+  const totalEl = document.getElementById('indicator-comment-total');
+  if (countEl) countEl.textContent = String(comments.length);
+  if (totalEl) totalEl.textContent = String(comments.length);
+  if (!el) return;
+  if (!comments.length) {
+    el.innerHTML = '<div class="text-sm text-gray-500 py-5">No comments yet.</div>';
+    return;
+  }
+  el.innerHTML = comments.map(c => `
+    <div class="py-3 border-b border-gray-800/50 last:border-0">
+      <div class="flex items-center justify-between gap-3 mb-1">
+        <span class="text-xs font-medium text-gray-300">${escapeHtml(c.authorName || 'Anonymous')}</span>
+        <span class="text-[11px] text-gray-600">${c.createdAt ? new Date(c.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''}</span>
+      </div>
+      <p class="text-sm text-gray-400 whitespace-pre-wrap leading-relaxed">${escapeHtml(c.body || '')}</p>
+    </div>
+  `).join('');
+}
+
+async function submitIndicatorComment(id) {
+  const bodyEl = document.getElementById('indicator-comment-body');
+  const authorEl = document.getElementById('indicator-comment-author');
+  const errEl = document.getElementById('indicator-comment-error');
+  const body = bodyEl?.value.trim() || '';
+  const authorName = authorEl?.value.trim() || 'Anonymous';
+  if (errEl) errEl.textContent = '';
+  if (body.length < 2) {
+    if (errEl) errEl.textContent = 'Write a little more before posting.';
+    return;
+  }
+  if (body.length > 1000) {
+    if (errEl) errEl.textContent = 'Comments are capped at 1000 characters.';
+    return;
+  }
+
+  let comments = [];
+  try {
+    const res = await fetch('/api/indicators/' + id + '/comments', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ body, authorName }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      comments = [data.comment, ...(await loadIndicatorComments(id)).filter(c => c.id !== data.comment.id)];
+      if (bodyEl) bodyEl.value = '';
+      renderIndicatorComments(id, comments);
+      return;
+    }
+  } catch (_) {}
+
+  const local = getLocalIndicatorEngagement(id);
+  const comment = {
+    id: 'local-' + Date.now(),
+    body,
+    authorName,
+    createdAt: new Date().toISOString(),
+  };
+  local.comments = [comment, ...(local.comments || [])].slice(0, 50);
+  saveLocalIndicatorEngagement(id, local);
+  if (bodyEl) bodyEl.value = '';
+  renderIndicatorComments(id, local.comments);
+}
+
+function indicatorActiveCategories(ind, marketIndex) {
+  const cats = new Set();
+  if (ind.markets) {
+    for (const mid of Object.keys(ind.markets)) {
+      const m = marketIndex[mid];
+      if (m?.cat) cats.add(m.cat);
+    }
+  }
+  for (const [cat, weight] of Object.entries(ind.weights || {})) {
+    if (cat !== 'referenceAsset' && Number(weight) > 0) cats.add(cat);
+  }
+  return cats;
+}
+
+function getRelatedMarketSuggestions(ind, limit = 8) {
+  const selected = new Set(Object.keys(ind.markets || {}));
+  const marketIndex = getMarketHistoryIndex();
+  const activeCats = indicatorActiveCategories(ind, marketIndex);
+  const words = new Set(String(`${ind.name || ''} ${ind.asset || ''}`)
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(w => w.length >= 4));
+
+  return _getAllMarkets()
+    .filter(m => !selected.has(m.mid))
+    .map(m => {
+      let score = 0;
+      const reasons = [];
+      if (m._sId === (ind.sector || 'crypto')) { score += 4; reasons.push(SECTORS[m._sId]?.label || m._sId); }
+      if (m._asset === ind.asset) { score += 3; reasons.push(m._asset); }
+      if (activeCats.has(m.cat)) { score += 3; reasons.push((m.cat || '').replace(/_/g, ' ')); }
+      const q = String(m.q || '').toLowerCase();
+      for (const w of words) {
+        if (q.includes(w)) score += 1;
+      }
+      score += Math.min(3, Math.log10((m.vol || 0) + 1));
+      return { ...m, _score: score, _why: [...new Set(reasons)].slice(0, 3).join(' / ') };
+    })
+    .filter(m => m._score > 3)
+    .sort((a, b) => b._score - a._score)
+    .slice(0, limit);
+}
+
+async function forkIndicatorWithMarket(indicatorId, marketId) {
+  const indicators = await getIndicators();
+  let ind = indicators.find(i => i.id === indicatorId);
+  if (!ind) {
+    try {
+      const res = await fetch('/api/indicators/' + indicatorId);
+      if (res.ok) ind = await res.json();
+    } catch (_) {}
+  }
+  if (!ind) return;
+  forkFromData(ind, indicatorId);
+  builderState.selectedMarkets[marketId] = makeMarketConfig(marketId, 100, false, getMarketMeta(marketId));
+}
+
 async function renderIndicatorDetail() {
   const hash = location.hash;
   const params = new URLSearchParams(hash.includes('?') ? hash.split('?')[1] : '');
@@ -868,7 +1182,11 @@ async function renderIndicatorDetail() {
   }
 
   const sector = ind.sector || 'crypto';
-  await ensureSectorsLoaded(SECTOR_ORDER);
+  if (typeof ensureAllSectorAssetsLoaded === 'function') {
+    await ensureAllSectorAssetsLoaded(SECTOR_ORDER);
+  } else {
+    await ensureSectorsLoaded(SECTOR_ORDER);
+  }
   const sectorData = sectorDataCache[sector];
 
   const ts = sectorData ? computeIndicatorTimeseries(ind, sectorData) : { dates: [], scores: [], prices: [] };
@@ -881,6 +1199,9 @@ async function renderIndicatorDetail() {
   const label = lastScore != null ? scoreLabel(lastScore) : '';
   const marketCount = ind.markets ? Object.keys(ind.markets).length : 0;
   const escapedName = ind.name.replace(/'/g, "\\'");
+  const viewCount = await recordIndicatorView(id, ind);
+  const comments = await loadIndicatorComments(id);
+  const relatedMarkets = getRelatedMarketSuggestions(ind);
 
   const corrStr = corr != null ? (corr > 0 ? '+' : '') + corr.toFixed(3) : '--';
   const corrClr = corr != null ? (Math.abs(corr) > 0.5 ? '#4ade80' : Math.abs(corr) > 0.3 ? '#fbbf24' : '#9ca3af') : '#6b7280';
@@ -890,9 +1211,9 @@ async function renderIndicatorDetail() {
   const predClr = predictive ? (predictive.score > 60 ? '#4ade80' : predictive.score > 40 ? '#fbbf24' : '#9ca3af') : '#6b7280';
   const lagStr = predictive ? `${predictive.optimalLag}d` : '--';
 
-  const refKey = ind.referenceAsset || 'btc_price';
+  const refKey = resolveIndicatorReferenceAsset(ind, sector);
   const refMeta = typeof ALL_REFERENCE_ASSETS !== 'undefined' ? ALL_REFERENCE_ASSETS.find(a => a.key === refKey) : null;
-  const refLabel = refMeta?.label || refKey;
+  const refLabel = refKey ? (refMeta?.label || refKey) : 'No reference asset';
 
   // Build markets list
   let marketsHtml = '';
@@ -918,11 +1239,33 @@ async function renderIndicatorDetail() {
       return `<div class="flex items-center gap-3 py-2 px-3 rounded-lg hover:bg-gray-800/40 transition-colors text-sm">
         <div class="w-8 text-right text-[11px] tabular-nums text-gray-500 shrink-0">${m.w}%</div>
         ${m.flip ? '<span class="text-[10px] text-red-400/70 w-6 shrink-0">INV</span>' : '<span class="w-6 shrink-0"></span>'}
-        <div class="flex-1 min-w-0 text-gray-300 truncate">${m.name}</div>
+        <div class="flex-1 min-w-0 text-gray-300 truncate">${escapeHtml(m.name)}</div>
         ${probStr ? `<span class="text-[11px] tabular-nums text-gray-500 shrink-0">${probStr}</span>` : ''}
       </div>`;
     }).join('');
   }
+
+  const relatedHtml = relatedMarkets.map(m => {
+    const prob = m.prob != null ? `${(m.prob * 100).toFixed(0)}%` : '--';
+    const vol = _fmtVol(m.vol) || '--';
+    const sectorLabel = SECTORS[m._sId]?.label || m._sId;
+    const safeMid = String(m.mid).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    return `
+      <div class="flex items-start gap-3 py-3 border-b border-gray-800/50 last:border-0">
+        <div class="flex-1 min-w-0">
+          <div class="text-sm text-gray-300 leading-snug">${escapeHtml(m.q || m.mid)}</div>
+          <div class="mt-1 flex items-center gap-2 flex-wrap">
+            <span class="sector-chip">${escapeHtml(sectorLabel)}</span>
+            <span class="text-[10px] text-gray-500">${escapeHtml(m._asset || 'OTHER')}</span>
+            <span class="text-[10px] text-gray-500">${escapeHtml((m.cat || 'other').replace(/_/g, ' '))}</span>
+            <span class="text-[10px] text-gray-500">prob ${prob}</span>
+            <span class="text-[10px] text-gray-500">vol ${vol}</span>
+            ${m._why ? `<span class="text-[10px] text-blue-400/80">${escapeHtml(m._why)}</span>` : ''}
+          </div>
+        </div>
+        <button onclick="forkIndicatorWithMarket('${ind.id}','${safeMid}')" class="shrink-0 px-2.5 py-1.5 text-[11px] text-green-300 bg-green-500/10 border border-green-500/20 rounded-md hover:border-green-400/50 transition-colors">Fork + add</button>
+      </div>`;
+  }).join('');
 
   container.innerHTML = `
     <div class="flex items-center gap-3 mb-6">
@@ -930,13 +1273,15 @@ async function renderIndicatorDetail() {
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
       </a>
       <div class="flex-1 min-w-0">
-        <h1 class="text-xl font-semibold text-gray-100 truncate">${ind.name}</h1>
+        <h1 class="text-xl font-semibold text-gray-100 truncate">${escapeHtml(ind.name)}</h1>
         <div class="flex items-center gap-2 mt-0.5 flex-wrap">
-          ${!ind._isOwned && (ind.creator || ind.creatorName) ? `<span class="text-[10px] text-gray-500">by ${ind.creator || ind.creatorName}</span>` : ''}
-          ${ind.sector ? `<span class="text-[10px] uppercase tracking-wide text-gray-500 bg-gray-800/60 px-1.5 py-0.5 rounded">${ind.sector}</span>` : ''}
-          <span class="text-[10px] text-gray-600">${marketCount} markets</span>
+          ${!ind._isOwned && (ind.creator || ind.creatorName) ? `<span class="text-[10px] text-gray-500">by ${escapeHtml(ind.creator || ind.creatorName)}</span>` : ''}
+          ${ind.sector ? `<span class="sector-chip">${escapeHtml(SECTORS[ind.sector]?.label || ind.sector)}</span>` : ''}
+          ${marketCount > 0 ? `<span class="text-[10px] text-gray-600">${marketCount} markets</span>` : ''}
           ${ind.fgEnabled ? '<span class="text-[10px] text-green-500/80">F&G blended</span>' : ''}
-          <span class="text-[10px] text-gray-600">vs ${refLabel}</span>
+          <span class="text-[10px] text-gray-600">vs ${escapeHtml(refLabel)}</span>
+          <span class="text-[10px] text-gray-600">${viewCount.toLocaleString()} views</span>
+          <span class="text-[10px] text-gray-600"><span id="indicator-comment-count">${comments.length}</span> comments</span>
           ${ind.publishedAt ? `<span class="text-[10px] text-gray-600">Published ${new Date(ind.publishedAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</span>` : ''}
           ${(ind.forkCount || 0) > 0 ? `<span class="text-[10px] text-blue-400">${ind.forkCount} fork${ind.forkCount !== 1 ? 's' : ''}</span>` : ''}
           ${ind.forkedFrom ? `<span class="text-[10px] text-gray-500">Forked from <a href="#indicator?id=${ind.forkedFrom}" class="text-blue-400 hover:underline" onclick="event.stopPropagation()">source</a></span>` : ''}
@@ -977,16 +1322,46 @@ async function renderIndicatorDetail() {
       </div>
     </div>
 
-    <div class="bg-gray-800/30 rounded-xl border border-gray-700/30 p-5 mb-6">
+    <div class="app-surface rounded-xl p-5 mb-6">
       <div style="height:320px"><canvas id="detail-chart"></canvas></div>
     </div>
 
-    ${marketCount > 0 ? `
-    <div class="bg-gray-800/30 rounded-xl border border-gray-700/30 p-5">
-      <h3 class="text-sm font-medium text-gray-300 mb-3">Markets <span class="text-gray-600 font-normal">(${marketCount})</span></h3>
-      <div class="max-h-[400px] overflow-y-auto space-y-0.5">${marketsHtml}</div>
-    </div>` : ''}
-  `;
+	    ${marketCount > 0 ? `
+	    <div class="app-surface rounded-xl p-5">
+	      <h3 class="text-sm font-medium text-gray-300 mb-3">Markets <span class="text-gray-600 font-normal">(${marketCount})</span></h3>
+	      <div class="max-h-[400px] overflow-y-auto space-y-0.5">${marketsHtml}</div>
+	    </div>` : ''}
+
+	    <div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mt-5">
+	      <div class="app-surface rounded-xl p-5">
+	        <div class="flex items-center justify-between gap-3 mb-4">
+	          <h3 class="text-sm font-medium text-gray-300">Comments</h3>
+	          <span class="text-[11px] text-gray-600"><span id="indicator-comment-total">${comments.length}</span> total</span>
+	        </div>
+	        <div class="space-y-3 mb-4">
+	          ${!authState.token ? `<input id="indicator-comment-author" maxlength="80" class="w-full bg-gray-950/60 border border-gray-800 rounded-lg px-3 py-2 text-sm text-gray-300 outline-none focus:border-blue-500/50" placeholder="Display name">` : ''}
+	          <textarea id="indicator-comment-body" maxlength="1000" rows="3" class="w-full bg-gray-950/60 border border-gray-800 rounded-lg px-3 py-2 text-sm text-gray-300 outline-none focus:border-blue-500/50 resize-none" placeholder="Add a comment"></textarea>
+	          <div class="flex items-center justify-between gap-3">
+	            <div id="indicator-comment-error" class="text-xs text-red-400"></div>
+	            <button onclick="submitIndicatorComment('${ind.id}')" class="px-3 py-1.5 text-xs text-blue-200 bg-blue-500/10 border border-blue-500/20 rounded-lg hover:border-blue-400/50 transition-colors">Post</button>
+	          </div>
+	        </div>
+	        <div id="indicator-comments-list" class="max-h-[360px] overflow-y-auto"></div>
+	      </div>
+
+	      <div class="app-surface rounded-xl p-5">
+	        <div class="flex items-center justify-between gap-3 mb-4">
+	          <h3 class="text-sm font-medium text-gray-300">Related Markets</h3>
+	          <span class="text-[11px] text-gray-600">${relatedMarkets.length} suggestions</span>
+	        </div>
+	        <div class="max-h-[500px] overflow-y-auto">
+	          ${relatedHtml || '<div class="text-sm text-gray-500 py-5">No related markets found in the loaded dataset.</div>'}
+	        </div>
+	      </div>
+	    </div>
+	  `;
+
+  renderIndicatorComments(id, comments);
 
   // Render chart
   requestAnimationFrame(() => {
@@ -1083,15 +1458,102 @@ async function renderIndicatorDetail() {
 // PAGE 2: BUILDER (Sector-aware)
 // ═════════════════════════════════════════════════════════════════════════════
 
+function showBuilderLanding() {
+  document.getElementById('builder-choice')?.classList.remove('hidden');
+  document.getElementById('builder-workspace')?.classList.add('hidden');
+}
+
+function showBuilderWorkspace() {
+  document.getElementById('builder-choice')?.classList.add('hidden');
+  document.getElementById('builder-workspace')?.classList.remove('hidden');
+}
+
+function clearBuilderFormValues() {
+  const nameEl = document.getElementById('builder-name');
+  if (nameEl) nameEl.value = '';
+  for (const id of ['bp-10', 'bp-50', 'bp-100', 'bp-500']) {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  }
+}
+
+function resetBuilderDraft() {
+  if (builderState.chartInstance) {
+    builderState.chartInstance.destroy();
+    builderState.chartInstance = null;
+  }
+  builderState.selectedMarkets = {};
+  builderState.fgEnabled = false;
+  builderState.fgWeight = 30;
+  builderState.chartPeriod = 'ALL';
+  builderState.editingId = null;
+  builderState.initialized = false;
+  builderState.builderStarted = true;
+  builderState.marketSearch = '';
+  builderState.referenceAsset = 'btc_price';
+  delete builderState._pendingName;
+  delete builderState._pendingForkedFrom;
+  delete builderState._pendingForkSource;
+  delete builderState._forkLoaded;
+  clearBuilderFormValues();
+}
+
+function startNewBuilder() {
+  resetBuilderDraft();
+  if ((location.hash || '').split('?')[0] === '#builder') {
+    renderBuilderPage();
+  } else {
+    location.hash = '#builder';
+  }
+}
+
+function hasBuilderContext(editId, forkId) {
+  return !!(
+    editId ||
+    forkId ||
+    builderState.builderStarted ||
+    builderState.editingId ||
+    builderState._pendingForkedFrom ||
+    builderState._pendingName
+  );
+}
+
+function copyIndicatorMarketsToBuilder(ind) {
+  if (!ind) return;
+  if (ind.markets) {
+    builderState.selectedMarkets = typeof ind.markets === 'object'
+      ? normalizeMarketConfig(ind.markets, ind.sector || 'crypto')
+      : {};
+  } else if (ind.weights) {
+    const sectorData = sectorDataCache[ind.sector || 'crypto'];
+    builderState.selectedMarkets = migrateWeightsToMarkets(ind.weights, ind.includeOther, sectorData, ind.asset, ind.sector || 'crypto');
+  } else {
+    builderState.selectedMarkets = {};
+  }
+}
+
 async function renderBuilderPage() {
   const hash = location.hash;
   const params = new URLSearchParams(hash.includes('?') ? hash.split('?')[1] : '');
   const editId = params.get('id');
   const forkId = params.get('fork');
 
+  if (!hasBuilderContext(editId, forkId)) {
+    showBuilderLanding();
+    return;
+  }
+
+  showBuilderWorkspace();
+  builderState.builderStarted = true;
+
   // Fork from an existing indicator via URL param
   if (forkId && !builderState._forkLoaded) {
     builderState._forkLoaded = forkId;
+    const cached = (await getIndicators()).find(i => i.id === forkId);
+    if (cached) {
+      forkFromData(cached, forkId);
+      return;
+    }
     try {
       const res = await fetch('/api/indicators/' + forkId);
       if (res.ok) {
@@ -1124,6 +1586,11 @@ async function renderBuilderPage() {
   // Load ALL available sectors — every market is available
   await ensureSectorsLoaded(SECTOR_ORDER);
 
+  if (builderState._pendingForkSource) {
+    copyIndicatorMarketsToBuilder(builderState._pendingForkSource);
+    delete builderState._pendingForkSource;
+  }
+
   // Set default reference asset
   if (!builderState.referenceAsset && !builderState.editingId) {
     builderState.referenceAsset = 'btc_price';
@@ -1137,7 +1604,7 @@ async function renderBuilderPage() {
         builderState.selectedMarkets = normalizeMarketConfig(ind.markets, ind.sector || 'crypto');
       } else if (ind.weights) {
         const sectorData = sectorDataCache[ind.sector || 'crypto'];
-        builderState.selectedMarkets = migrateWeightsToMarkets(ind.weights, ind.includeOther, sectorData, ind.asset);
+        builderState.selectedMarkets = migrateWeightsToMarkets(ind.weights, ind.includeOther, sectorData, ind.asset, ind.sector || 'crypto');
       }
     }
   }
@@ -1161,27 +1628,32 @@ function normalizeMarketConfig(markets, defaultSector) {
   const out = {};
   for (const [mid, val] of Object.entries(markets)) {
     if (typeof val === 'number') {
-      out[mid] = { w: val, flip: false };
+      out[mid] = { w: val, flip: false, sector: defaultSector || null };
     } else if (typeof val === 'object' && val !== null) {
-      out[mid] = { w: val.w ?? val.weight ?? 100, flip: !!val.flip };
+      out[mid] = {
+        w: val.w ?? val.weight ?? 100,
+        flip: !!val.flip,
+        sector: val.sector || defaultSector || null,
+        asset: val.asset || null,
+      };
     } else {
-      out[mid] = { w: 100, flip: false };
+      out[mid] = { w: 100, flip: false, sector: defaultSector || null };
     }
   }
   return out;
 }
 
 // Migrate legacy category weights to per-market selection
-function migrateWeightsToMarkets(weights, includeOther, sectorData, asset) {
+function migrateWeightsToMarkets(weights, includeOther, sectorData, asset, defaultSector) {
   const assetData = sectorData?.sandbox?.assets?.[asset];
   if (!assetData?.markets) return {};
   const selected = {};
   for (const [mid, m] of Object.entries(assetData.markets)) {
     const catWeight = weights[m.cat];
     if (catWeight != null && catWeight > 0) {
-      selected[mid] = { w: catWeight, flip: false };
+      selected[mid] = { w: catWeight, flip: false, sector: defaultSector || null, asset };
     } else if (m.cat === 'other' && includeOther && (weights.other || 0) > 0) {
-      selected[mid] = { w: weights.other, flip: false };
+      selected[mid] = { w: weights.other, flip: false, sector: defaultSector || null, asset };
     }
   }
   return selected;
@@ -1210,6 +1682,20 @@ function _getAllMarkets() {
     }
   }
   return all;
+}
+
+function getMarketMeta(mid) {
+  return _getAllMarkets().find(m => m.mid === mid) || null;
+}
+
+function makeMarketConfig(mid, weight = 100, flip = false, meta = null) {
+  const m = meta || getMarketMeta(mid);
+  return {
+    w: weight,
+    flip,
+    sector: m?._sId || null,
+    asset: m?._asset || null,
+  };
 }
 
 function _filterAndSortMarkets(all) {
@@ -1443,7 +1929,7 @@ function selectAllMarketsInCat(cat, select) {
     if (cat === 'other' && Object.keys(SECTORS).some(sId => SECTORS[sId]?.categories?.[m.cat])) continue;
     if (m.cat !== cat) continue;
     if (select) {
-      if (builderState.selectedMarkets[m.mid] == null) builderState.selectedMarkets[m.mid] = { w: 100, flip: false };
+      if (builderState.selectedMarkets[m.mid] == null) builderState.selectedMarkets[m.mid] = makeMarketConfig(m.mid, 100, false, m);
     } else {
       delete builderState.selectedMarkets[m.mid];
     }
@@ -1459,7 +1945,7 @@ function onBuilderMarketSearch(val) {
 
 function toggleMarket(mid, checked) {
   if (checked) {
-    builderState.selectedMarkets[mid] = { w: 100, flip: false };
+    builderState.selectedMarkets[mid] = makeMarketConfig(mid);
   } else {
     delete builderState.selectedMarkets[mid];
   }
@@ -1471,7 +1957,7 @@ function onMarketWeightSlider(input) {
   const mid = input.dataset.mid;
   const val = parseInt(input.value);
   const prev = builderState.selectedMarkets[mid];
-  builderState.selectedMarkets[mid] = { w: val, flip: isMarketFlipped(prev) };
+  builderState.selectedMarkets[mid] = makeMarketConfig(mid, val, isMarketFlipped(prev));
   const label = document.getElementById('mw-' + mid);
   if (label) label.textContent = val + '%';
   updateBuilderChart();
@@ -1481,7 +1967,7 @@ function toggleMarketFlip(mid, event) {
   if (event) event.stopPropagation();
   const prev = builderState.selectedMarkets[mid];
   if (!prev) return;
-  builderState.selectedMarkets[mid] = { w: getMarketWeight(prev), flip: !isMarketFlipped(prev) };
+  builderState.selectedMarkets[mid] = makeMarketConfig(mid, getMarketWeight(prev), !isMarketFlipped(prev));
   renderBuilderMarketPicker();
   updateBuilderChart();
 }
@@ -1867,6 +2353,94 @@ function renderBuilderMetrics(ts) {
 
 // (Market browser removed — replaced by market picker in right panel)
 
+// ── Builder Landing / Fork Picker ──────────────────────────────────────────
+
+async function openForkIndicatorModal() {
+  const modal = document.getElementById('fork-modal');
+  const input = document.getElementById('fork-search');
+  const results = document.getElementById('fork-results');
+  if (!modal || !results) return;
+
+  modal.classList.remove('hidden');
+  if (input) input.value = '';
+  results.innerHTML = '<div class="text-sm text-gray-500 py-8 text-center">Loading indicators...</div>';
+
+  try {
+    builderForkIndicators = await getIndicators();
+  } catch (_) {
+    builderForkIndicators = getIndicatorsSync();
+  }
+
+  renderForkIndicatorResults('');
+  setTimeout(() => input?.focus(), 0);
+}
+
+function closeForkIndicatorModal() {
+  document.getElementById('fork-modal')?.classList.add('hidden');
+}
+
+function renderForkIndicatorResults(query = '') {
+  const results = document.getElementById('fork-results');
+  if (!results) return;
+
+  const q = query.trim().toLowerCase();
+  const items = (builderForkIndicators.length ? builderForkIndicators : getIndicatorsSync())
+    .filter(ind => {
+      if (!q) return true;
+      const sectorLabel = SECTORS[ind.sector || 'crypto']?.label || ind.sector || 'crypto';
+      return [
+        ind.name,
+        ind.creator,
+        ind.creatorName,
+        ind.asset,
+        ind.sector,
+        sectorLabel,
+      ].some(v => String(v || '').toLowerCase().includes(q));
+    })
+    .slice(0, 40);
+
+  if (items.length === 0) {
+    results.innerHTML = '<div class="text-sm text-gray-500 py-8 text-center">No matching indicators</div>';
+    return;
+  }
+
+  results.innerHTML = items.map(ind => {
+    const sector = ind.sector || 'crypto';
+    const sectorLabel = SECTORS[sector]?.label || sector;
+    const marketCount = ind.markets ? Object.keys(ind.markets).length : 0;
+    const categoryCount = ind.weights ? Object.entries(ind.weights).filter(([, v]) => Number(v) > 0).length : 0;
+    const sourceCount = marketCount > 0
+      ? `${marketCount} market${marketCount !== 1 ? 's' : ''}`
+      : `${categoryCount} categor${categoryCount === 1 ? 'y' : 'ies'}`;
+    const creator = ind.creator || ind.creatorName || (ind._isOwned ? 'You' : 'PMSI Team');
+    const id = String(ind.id).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+
+    return `
+      <button onclick="selectForkIndicator('${id}')" class="w-full text-left app-surface rounded-lg px-4 py-3 hover:border-green-500/40 transition-colors">
+        <div class="flex items-start justify-between gap-3">
+          <div class="min-w-0">
+            <div class="text-sm font-medium text-gray-100 truncate">${escapeHtml(ind.name || 'Untitled Indicator')}</div>
+            <div class="mt-1 flex items-center gap-2 flex-wrap">
+              <span class="text-[10px] text-gray-500">by ${escapeHtml(creator)}</span>
+              <span class="sector-chip">${escapeHtml(sectorLabel)}</span>
+              ${ind.asset ? `<span class="text-[10px] text-gray-500">${escapeHtml(ind.asset)}</span>` : ''}
+              <span class="text-[10px] text-gray-500">${sourceCount}</span>
+              ${ind.fgEnabled ? '<span class="text-[10px] text-green-500/80">F&G</span>' : ''}
+            </div>
+          </div>
+          <span class="shrink-0 text-[11px] text-green-300 bg-green-500/10 border border-green-500/20 rounded-md px-2 py-1">Fork</span>
+        </div>
+      </button>`;
+  }).join('');
+}
+
+function selectForkIndicator(id) {
+  const ind = builderForkIndicators.find(i => i.id === id) || getIndicatorsSync().find(i => i.id === id);
+  if (!ind) return;
+  closeForkIndicatorModal();
+  forkFromData(ind, id);
+}
+
 // ── Save / Load ─────────────────────────────────────────────────────────────
 
 async function saveBuilderIndicator() {
@@ -1928,8 +2502,10 @@ async function saveBuilderIndicator() {
   builderState.selectedMarkets = {};
   builderState.fgEnabled = false;
   builderState.fgWeight = 30;
+  builderState.builderStarted = false;
   delete builderState._pendingForkedFrom;
   delete builderState._forkLoaded;
+  delete builderState._pendingForkSource;
 
   location.hash = '#indicators';
 }
@@ -1974,6 +2550,7 @@ function loadBuilderIndicator(id) {
   const ind = getIndicatorsSync().find(i => i.id === id);
   if (!ind) return;
 
+  builderState.builderStarted = true;
   builderState.editingId = id;
   builderState.fgEnabled = ind.fgEnabled || false;
   builderState.fgWeight = ind.fgWeight || 30;
@@ -1994,7 +2571,7 @@ function loadBuilderIndicator(id) {
     builderState.selectedMarkets = normalizeMarketConfig(ind.markets, ind.sector || 'crypto');
   } else if (ind.weights) {
     const sectorData = sectorDataCache[ind.sector || 'crypto'];
-    builderState.selectedMarkets = migrateWeightsToMarkets(ind.weights, ind.includeOther, sectorData, ind.asset);
+    builderState.selectedMarkets = migrateWeightsToMarkets(ind.weights, ind.includeOther, sectorData, ind.asset, ind.sector || 'crypto');
   }
 
   syncBuilderControls();
@@ -2133,13 +2710,17 @@ function computeBacktest(dates, scores, prices, entryThreshold, exitThreshold, s
     if (strategy === 'contrarian' || strategy === 'long_only') return score >= exitThreshold;
     return score <= exitThreshold; // momentum
   };
+  const netTradeReturn = (exitPrice, entryPrice, exitCostPaid = true) => {
+    if (!entryPrice || entryPrice <= 0) return 0;
+    const exitCost = exitCostPaid ? (1 - halfCost) : 1;
+    return (exitPrice / entryPrice) * (1 - halfCost) * exitCost - 1;
+  };
 
   let position = false;
   let entryPrice = 0;
   let equity = 1;
   let maxEquity = 1;
   let maxDrawdown = 0;
-  let trades = 0;
   let wins = 0;
   let daysInPosition = 0;
   const equityCurve = [];
@@ -2171,11 +2752,11 @@ function computeBacktest(dates, scores, prices, entryThreshold, exitThreshold, s
       position = true;
       entryPrice = prices[i];
       equity *= (1 - halfCost); // entry cost
-      trades++;
       currentTrade = { entryIdx: i, entryDate: dates[i], entryPrice: prices[i], entryScore: scores[i] };
     } else if (position && shouldExit(scores[i])) {
       equity *= (1 - halfCost); // exit cost
-      const pnl = (prices[i] - entryPrice) / entryPrice;
+      const grossPnl = (prices[i] - entryPrice) / entryPrice;
+      const pnl = netTradeReturn(prices[i], entryPrice, true);
       if (pnl > 0) wins++;
       position = false;
       if (currentTrade) {
@@ -2184,6 +2765,7 @@ function computeBacktest(dates, scores, prices, entryThreshold, exitThreshold, s
         currentTrade.exitPrice = prices[i];
         currentTrade.exitScore = scores[i];
         currentTrade.pnl = pnl;
+        currentTrade.grossPnl = grossPnl;
         currentTrade.duration = i - currentTrade.entryIdx;
         tradeLog.push(currentTrade);
         currentTrade = null;
@@ -2209,7 +2791,8 @@ function computeBacktest(dates, scores, prices, entryThreshold, exitThreshold, s
     currentTrade.exitDate = dates[lastIdx];
     currentTrade.exitPrice = prices[lastIdx];
     currentTrade.exitScore = scores[lastIdx];
-    currentTrade.pnl = (prices[lastIdx] - currentTrade.entryPrice) / currentTrade.entryPrice;
+    currentTrade.pnl = netTradeReturn(prices[lastIdx], currentTrade.entryPrice, false);
+    currentTrade.grossPnl = (prices[lastIdx] - currentTrade.entryPrice) / currentTrade.entryPrice;
     currentTrade.duration = lastIdx - currentTrade.entryIdx;
     currentTrade.open = true;
     tradeLog.push(currentTrade);
@@ -2244,15 +2827,16 @@ function computeBacktest(dates, scores, prices, entryThreshold, exitThreshold, s
 
   // Profit factor
   let profitFactor = null;
-  const grossProfit = tradeLog.filter(t => t.pnl > 0).reduce((s, t) => s + t.pnl, 0);
-  const grossLoss = Math.abs(tradeLog.filter(t => t.pnl < 0).reduce((s, t) => s + t.pnl, 0));
+  const closedTrades = tradeLog.filter(t => !t.open);
+  const grossProfit = closedTrades.filter(t => t.pnl > 0).reduce((s, t) => s + t.pnl, 0);
+  const grossLoss = Math.abs(closedTrades.filter(t => t.pnl < 0).reduce((s, t) => s + t.pnl, 0));
   if (grossLoss > 0) profitFactor = grossProfit / grossLoss;
 
   // Avg trade PnL
-  const avgTrade = tradeLog.length > 0 ? (tradeLog.reduce((s, t) => s + t.pnl, 0) / tradeLog.length) * 100 : 0;
+  const avgTrade = closedTrades.length > 0 ? (closedTrades.reduce((s, t) => s + t.pnl, 0) / closedTrades.length) * 100 : 0;
 
   // Avg duration
-  const avgDuration = tradeLog.length > 0 ? tradeLog.reduce((s, t) => s + t.duration, 0) / tradeLog.length : 0;
+  const avgDuration = closedTrades.length > 0 ? closedTrades.reduce((s, t) => s + t.duration, 0) / closedTrades.length : 0;
 
   // Exposure
   const exposure = totalDays > 0 ? (daysInPosition / totalDays) * 100 : 0;
@@ -2260,8 +2844,8 @@ function computeBacktest(dates, scores, prices, entryThreshold, exitThreshold, s
   return {
     totalReturn: totalReturn * 100,
     maxDrawdown: maxDrawdown * 100,
-    trades,
-    winRate: trades > 0 ? (wins / trades) * 100 : 0,
+    trades: closedTrades.length,
+    winRate: closedTrades.length > 0 ? (wins / closedTrades.length) * 100 : 0,
     buyHold: lastBh * 100,
     alpha: (totalReturn - lastBh) * 100,
     sharpe,
@@ -2367,7 +2951,7 @@ function renderBacktestPanel() {
       ${m('Return', `${result.totalReturn >= 0 ? '+' : ''}${result.totalReturn.toFixed(1)}%`, retColor, 'Total strategy return. Net P&L from all trades over the backtest period.')}
       ${m('Buy & Hold', `${result.buyHold >= 0 ? '+' : ''}${result.buyHold.toFixed(1)}%`, 'text-gray-300', 'Benchmark return from holding the asset for the entire period with no trading.')}
       ${m('Alpha', `${result.alpha >= 0 ? '+' : ''}${result.alpha.toFixed(1)}%`, alphaColor, 'Excess return vs buy &amp; hold. Alpha = Strategy Return - Buy &amp; Hold Return.')}
-      ${m('Sharpe', sharpeStr, 'text-gray-200', 'Risk-adjusted return. (Mean daily return / Std dev of daily returns) * sqrt(365). Above 1.0 is good, above 2.0 is excellent.')}
+      ${m('Sharpe', sharpeStr, 'text-gray-200', 'Risk-adjusted return. (Mean daily return / Std dev of daily returns) * sqrt(252). Above 1.0 is good, above 2.0 is excellent.')}
       ${m('Sortino', sortinoStr, 'text-gray-200', 'Like Sharpe but only penalizes downside volatility. Higher is better since it ignores upside variance.')}
     </div>
     <div class="grid grid-cols-4 sm:grid-cols-7 gap-x-6 gap-y-3">
@@ -2376,7 +2960,7 @@ function renderBacktestPanel() {
       ${m('Win Rate', `${result.winRate.toFixed(0)}%`, 'text-gray-200', 'Percentage of trades that were profitable. Win Rate = Winning Trades / Total Trades.')}
       ${m('Profit Factor', pfStr, 'text-gray-200', 'Gross profit / Gross loss. Above 1.0 means profitable overall. Above 2.0 is strong.')}
       ${m('Trades', result.trades, 'text-gray-200', 'Total number of completed round-trip trades (entry + exit) during the backtest.')}
-      ${m('Predictive', predStr, predColor, 'Predictive score (0-100). Measures how well this indicator frontruns price moves via lagged cross-correlation.')}
+      ${m('Predictive', predStr, predColor, 'Predictive score (0-100). Measures how well this indicator leads future returns via lagged cross-correlation.')}
       ${m('Peak Lag', predLagStr, 'text-gray-200', 'Optimal lag in days where the indicator best predicts future price movement.')}
     </div>`;
 
@@ -2400,9 +2984,12 @@ function renderTradeLog(tradeLog) {
     return;
   }
   // Keep visibility state from toggle button
-  const totalPnl = tradeLog.reduce((s, t) => s + t.pnl, 0);
-  const avgPnl = (totalPnl / tradeLog.length) * 100;
-  const avgDur = tradeLog.reduce((s, t) => s + t.duration, 0) / tradeLog.length;
+  const closedTrades = tradeLog.filter(t => !t.open);
+  const totalPnl = closedTrades.reduce((s, t) => s + t.pnl, 0);
+  const avgPnl = closedTrades.length > 0 ? (totalPnl / closedTrades.length) * 100 : 0;
+  const avgDur = closedTrades.length > 0 ? closedTrades.reduce((s, t) => s + t.duration, 0) / closedTrades.length : 0;
+  const openCount = tradeLog.length - closedTrades.length;
+  const tradeCountLabel = `${closedTrades.length} closed${openCount ? `, ${openCount} open` : ''}`;
   const fmtDate = d => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '--';
   const fmtPnl = v => `${v >= 0 ? '+' : ''}${(v * 100).toFixed(1)}%`;
   const pnlColor = v => v >= 0 ? 'text-green-400' : 'text-red-400';
@@ -2434,7 +3021,7 @@ function renderTradeLog(tradeLog) {
       </tr></thead>
       <tbody>${rows}</tbody>
       <tfoot><tr class="border-t border-gray-700/30 text-gray-400 font-medium">
-        <td class="px-3 py-1.5" colspan="4">${tradeLog.length} trades</td>
+        <td class="px-3 py-1.5" colspan="4">${tradeCountLabel}</td>
         <td class="px-3 py-1.5"></td>
         <td class="px-3 py-1.5 tabular-nums ${pnlColor(avgPnl / 100)}">${avgPnl >= 0 ? '+' : ''}${avgPnl.toFixed(1)}%</td>
         <td class="px-3 py-1.5 tabular-nums">${avgDur.toFixed(0)}d</td>
