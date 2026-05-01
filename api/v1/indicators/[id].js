@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const { getDb, withDatabaseConfigError } = require('../../_lib/db');
 const { computeIndicator } = require('../../_lib/compute');
+const { hasPaidPricing, paidApiConfigSummary } = require('../../_lib/indicatorPrivacy');
 
 module.exports = withDatabaseConfigError(async function handler(req, res) {
   if (req.method === 'OPTIONS') {
@@ -78,7 +79,7 @@ module.exports = withDatabaseConfigError(async function handler(req, res) {
     label: result.latestScore != null ? (result.latestScore >= 80 ? 'Strongly Bullish' : result.latestScore >= 60 ? 'Bullish' : result.latestScore >= 40 ? 'Neutral' : result.latestScore >= 20 ? 'Bearish' : 'Strongly Bearish') : null,
     predictive: result.predictive || null,
     breakdown: result.breakdown,
-    config: result.config,
+    config: hasPaidPricing(indicator) ? paidApiConfigSummary(indicator, result) : result.config,
     timeseries: {
       dates: result.dates,
       scores: result.scores,

@@ -156,6 +156,52 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
+function indicatorBundlePrices(ind = {}) {
+  const prices = ind.bundlePrices || {};
+  return [10, 50, 100, 500].map(tier => Number(prices[tier] || 0));
+}
+
+function isPaidIndicator(ind = {}) {
+  return !!ind.protected || !!ind.isPaid || indicatorBundlePrices(ind).some(price => Number.isFinite(price) && price > 0);
+}
+
+function isRecipeProtected(ind = {}) {
+  return isPaidIndicator(ind) && !ind._isOwned;
+}
+
+function canComputeIndicator(ind = {}) {
+  return !!(ind.markets || ind.weights);
+}
+
+function canForkIndicator(ind = {}) {
+  return !isPaidIndicator(ind) && ind.forkable !== false && canComputeIndicator(ind);
+}
+
+function getIndicatorScore(ind = {}) {
+  if (isRecipeProtected(ind)) return null;
+  const raw = ind.score ?? ind.latestScore ?? ind.latest_score;
+  const score = raw == null ? null : Number(raw);
+  return Number.isFinite(score) ? score : null;
+}
+
+function getIndicatorMarketCount(ind = {}) {
+  if (Number.isFinite(Number(ind.marketCount))) return Number(ind.marketCount);
+  if (ind.markets && typeof ind.markets === 'object') return Object.keys(ind.markets).length;
+  return Object.entries(ind.weights || {})
+    .filter(([key, value]) => !['referenceAsset', 'markets'].includes(key) && Number(value) > 0)
+    .length;
+}
+
+function indicatorProtectionBadge(ind = {}) {
+  return isPaidIndicator(ind)
+    ? '<span class="text-[10px] text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded px-1.5 py-0.5">Protected</span>'
+    : '';
+}
+
+function protectedForkMessage() {
+  alert('This is a paid protected indicator. Its recipe cannot be forked or copied.');
+}
+
 let _marketHistoryIndexCache = null;
 
 function invalidateMarketHistoryIndex() {
@@ -629,7 +675,7 @@ async function renderIndicatorsPage() {
   // Compute stats for each indicator
   const ranked = filtered.map(ind => {
     const sectorData = sectorDataCache[ind.sector || 'crypto'];
-    if (sectorData) {
+    if (sectorData && canComputeIndicator(ind)) {
       const ts = computeIndicatorTimeseries(ind, sectorData);
       const corr = computeCorrelation(ts.scores, ts.prices);
       const dirAcc = computeDirectionalAccuracy(ts.scores, ts.prices);
@@ -638,7 +684,7 @@ async function renderIndicatorsPage() {
       const lastScore = [...ts.scores].reverse().find(s => s != null);
       return { ind, ts, corr, dirAcc, predictive, deltas, lastScore };
     }
-    return { ind, ts: { dates: [], scores: [], prices: [] }, corr: null, dirAcc: null, predictive: null, deltas: {}, lastScore: null };
+    return { ind, ts: { dates: [], scores: [], prices: [] }, corr: null, dirAcc: null, predictive: null, deltas: {}, lastScore: getIndicatorScore(ind) };
   });
 
   // Sort
@@ -701,7 +747,7 @@ async function renderIndicatorsPage() {
     const indicators = await getIndicators();
     for (const ind of indicators) {
       const sectorData = sectorDataCache[ind.sector || 'crypto'];
-      if (!sectorData) continue;
+      if (!sectorData || !canComputeIndicator(ind)) continue;
       const canvas = document.getElementById('spark-' + ind.id);
       if (canvas) {
         const ts = computeIndicatorTimeseries(ind, sectorData);
@@ -713,6 +759,10 @@ async function renderIndicatorsPage() {
 }
 
 function getIndicatorComponents(ind, catMeta) {
+  if (isRecipeProtected(ind)) {
+    const count = getIndicatorMarketCount(ind);
+    return `<span style="color:#fbbf24">Protected recipe</span>${count ? ` <span style="color:#6b7280">${count} inputs</span>` : ''}`;
+  }
   if (ind.markets) {
     const marketCount = Object.keys(ind.markets).length;
     const catCounts = {};
@@ -793,9 +843,10 @@ function renderIndicatorTableUnified(ranked) {
     const predStr = predictive ? predictive.score.toString() : '--';
     const predClr = predictive ? (predictive.score > 60 ? '#4ade80' : predictive.score > 40 ? '#fbbf24' : '#9ca3af') : '#4b5563';
     const escapedName = ind.name.replace(/'/g, "\\'");
-    const marketCount = ind.markets ? Object.keys(ind.markets).length : 0;
+    const marketCount = getIndicatorMarketCount(ind);
     const label = lastScore != null ? scoreLabel(lastScore) : '';
     const sectorTag = (ind.sector && ind.sector !== 'crypto') ? `<span class="sector-chip shrink-0">${SECTORS[ind.sector]?.label || ind.sector}</span>` : '';
+    const protectionBadge = indicatorProtectionBadge(ind);
 
     html += `
           <tr class="group ind-row-anim cursor-pointer" style="animation-delay:${idx * 40}ms" onclick="location.hash='#indicator?id=${ind.id}'">
@@ -813,6 +864,7 @@ function renderIndicatorTableUnified(ranked) {
                   <div class="flex items-center gap-2 min-w-0">
                     <span class="text-[13px] text-gray-100 font-medium leading-tight truncate">${ind.name}</span>
                     ${sectorTag}
+                    ${protectionBadge}
                   </div>
                   <div class="flex items-center gap-2 mt-0.5">
                     ${!ind._isOwned && ind.creator ? `<span class="text-[10px] text-gray-500">by ${ind.creator}</span>` : ''}
@@ -845,7 +897,9 @@ function renderIndicatorTableUnified(ranked) {
                 <button onclick="editIndicator('${ind.id}')" class="ind-action text-gray-500 hover:text-blue-400" title="Edit">${svgEdit}</button>
                 <button onclick="confirmDeleteIndicator('${ind.id}')" class="ind-action text-gray-500 hover:text-red-400" title="Delete">${svgTrash}</button>
                 ` : `
-                <button onclick="forkIndicator('${ind.id}')" class="ind-action text-gray-500 hover:text-green-400" title="Fork">${svgFork}</button>
+                ${canForkIndicator(ind)
+                  ? `<button onclick="forkIndicator('${ind.id}')" class="ind-action text-gray-500 hover:text-green-400" title="Fork">${svgFork}</button>`
+                  : `<button onclick="protectedForkMessage()" class="ind-action text-gray-600 cursor-not-allowed" title="Protected recipe">${svgFork}</button>`}
                 `}
               </span>
             </td>
@@ -871,10 +925,11 @@ function renderIndicatorCards(ranked) {
     const dirAccClr = dirAcc != null ? (dirAcc > 55 ? '#4ade80' : dirAcc > 50 ? '#fbbf24' : '#9ca3af') : '#6b7280';
     const predStr = predictive ? predictive.score.toString() : '--';
     const predClr = predictive ? (predictive.score > 60 ? '#4ade80' : predictive.score > 40 ? '#fbbf24' : '#9ca3af') : '#6b7280';
-    const marketCount = ind.markets ? Object.keys(ind.markets).length : 0;
+    const marketCount = getIndicatorMarketCount(ind);
     const escapedName = ind.name.replace(/'/g, "\\'");
     const label = lastScore != null ? scoreLabel(lastScore) : '';
     const sectorTag = (ind.sector && ind.sector !== 'crypto') ? `<span class="sector-chip">${SECTORS[ind.sector]?.label || ind.sector}</span>` : '';
+    const protectionBadge = indicatorProtectionBadge(ind);
 
     html += `
       <div class="group ind-card-anim app-surface rounded-xl hover:border-gray-600/60 transition-all duration-200 hover:bg-gray-800/50 hover:shadow-lg hover:shadow-black/20 overflow-hidden flex flex-col cursor-pointer" style="animation-delay:${idx * 50}ms" onclick="location.hash='#indicator?id=${ind.id}'">
@@ -885,6 +940,7 @@ function renderIndicatorCards(ranked) {
             <div class="flex items-center gap-2 mt-1 flex-wrap">
               ${!ind._isOwned && ind.creator ? `<span class="text-[10px] text-gray-500">by ${ind.creator}</span>` : ''}
               ${sectorTag}
+              ${protectionBadge}
               ${marketCount > 0 ? `<span class="text-[10px] text-gray-500">${marketCount} market${marketCount !== 1 ? 's' : ''}</span>` : ''}
               ${ind.fgEnabled ? '<span class="text-[10px] text-green-500/80">F&G</span>' : ''}
               ${label ? `<span class="text-[10px] text-gray-600">${label}</span>` : ''}
@@ -896,7 +952,9 @@ function renderIndicatorCards(ranked) {
             <button onclick="editIndicator('${ind.id}')" class="ind-action text-gray-500 hover:text-blue-400" title="Edit">${svgEditSm}</button>
             <button onclick="confirmDeleteIndicator('${ind.id}')" class="ind-action text-gray-500 hover:text-red-400" title="Delete">${svgTrashSm}</button>
             ` : `
-            <button onclick="forkIndicator('${ind.id}')" class="ind-action text-gray-500 hover:text-green-400" title="Fork">${svgForkSm}</button>
+            ${canForkIndicator(ind)
+              ? `<button onclick="forkIndicator('${ind.id}')" class="ind-action text-gray-500 hover:text-green-400" title="Fork">${svgForkSm}</button>`
+              : `<button onclick="protectedForkMessage()" class="ind-action text-gray-600 cursor-not-allowed" title="Protected recipe">${svgForkSm}</button>`}
             `}
           </div>
         </div>
@@ -938,14 +996,17 @@ async function forkIndicator(id) {
       const res = await fetch('/api/indicators/' + id);
       if (!res.ok) throw new Error('Not found');
       const data = await res.json();
+      if (!canForkIndicator(data)) { protectedForkMessage(); return; }
       forkFromData(data, id);
     } catch (err) { console.error('Fork failed:', err); }
     return;
   }
+  if (!canForkIndicator(ind)) { protectedForkMessage(); return; }
   forkFromData(ind, id);
 }
 
 function forkFromData(ind, sourceId) {
+  if (!canForkIndicator(ind)) { protectedForkMessage(); return; }
   builderState.editingId = null;
   builderState.builderStarted = true;
   builderState._pendingName = (ind.name || 'Indicator') + ' (fork)';
@@ -1161,6 +1222,7 @@ async function forkIndicatorWithMarket(indicatorId, marketId) {
     } catch (_) {}
   }
   if (!ind) return;
+  if (!canForkIndicator(ind)) { protectedForkMessage(); return; }
   forkFromData(ind, indicatorId);
   builderState.selectedMarkets[marketId] = makeMarketConfig(marketId, 100, false, getMarketMeta(marketId));
 }
@@ -1182,26 +1244,29 @@ async function renderIndicatorDetail() {
   }
 
   const sector = ind.sector || 'crypto';
-  if (typeof ensureAllSectorAssetsLoaded === 'function') {
+  const recipeProtected = isRecipeProtected(ind);
+  if (recipeProtected) {
+    await ensureSectorsLoaded([sector]);
+  } else if (typeof ensureAllSectorAssetsLoaded === 'function') {
     await ensureAllSectorAssetsLoaded(SECTOR_ORDER);
   } else {
     await ensureSectorsLoaded(SECTOR_ORDER);
   }
   const sectorData = sectorDataCache[sector];
 
-  const ts = sectorData ? computeIndicatorTimeseries(ind, sectorData) : { dates: [], scores: [], prices: [] };
+  const ts = (sectorData && canComputeIndicator(ind) && !recipeProtected) ? computeIndicatorTimeseries(ind, sectorData) : { dates: [], scores: [], prices: [] };
   const corr = computeCorrelation(ts.scores, ts.prices);
   const dirAcc = computeDirectionalAccuracy(ts.scores, ts.prices);
   const predictive = computePredictiveScore(ts.scores, ts.prices);
   const deltas = computePeriodDeltas(ts.scores, ts.dates);
-  const lastScore = [...ts.scores].reverse().find(s => s != null);
+  const lastScore = [...ts.scores].reverse().find(s => s != null) ?? getIndicatorScore(ind);
   const sColor = lastScore != null ? scoreColor(lastScore) : '#6b7280';
-  const label = lastScore != null ? scoreLabel(lastScore) : '';
-  const marketCount = ind.markets ? Object.keys(ind.markets).length : 0;
+  const label = recipeProtected ? 'Protected' : (lastScore != null ? scoreLabel(lastScore) : '');
+  const marketCount = getIndicatorMarketCount(ind);
   const escapedName = ind.name.replace(/'/g, "\\'");
   const viewCount = await recordIndicatorView(id, ind);
   const comments = await loadIndicatorComments(id);
-  const relatedMarkets = getRelatedMarketSuggestions(ind);
+  const relatedMarkets = recipeProtected ? [] : getRelatedMarketSuggestions(ind);
 
   const corrStr = corr != null ? (corr > 0 ? '+' : '') + corr.toFixed(3) : '--';
   const corrClr = corr != null ? (Math.abs(corr) > 0.5 ? '#4ade80' : Math.abs(corr) > 0.3 ? '#fbbf24' : '#9ca3af') : '#6b7280';
@@ -1217,7 +1282,7 @@ async function renderIndicatorDetail() {
 
   // Build markets list
   let marketsHtml = '';
-  if (ind.markets && marketCount > 0) {
+  if (!recipeProtected && ind.markets && marketCount > 0) {
     const entries = [];
     for (const [mid, rawW] of Object.entries(ind.markets)) {
       const w = typeof rawW === 'object' ? (rawW.w ?? 100) : (typeof rawW === 'number' ? rawW : 100);
@@ -1263,7 +1328,7 @@ async function renderIndicatorDetail() {
             ${m._why ? `<span class="text-[10px] text-blue-400/80">${escapeHtml(m._why)}</span>` : ''}
           </div>
         </div>
-        <button onclick="forkIndicatorWithMarket('${ind.id}','${safeMid}')" class="shrink-0 px-2.5 py-1.5 text-[11px] text-green-300 bg-green-500/10 border border-green-500/20 rounded-md hover:border-green-400/50 transition-colors">Fork + add</button>
+        ${canForkIndicator(ind) ? `<button onclick="forkIndicatorWithMarket('${ind.id}','${safeMid}')" class="shrink-0 px-2.5 py-1.5 text-[11px] text-green-300 bg-green-500/10 border border-green-500/20 rounded-md hover:border-green-400/50 transition-colors">Fork + add</button>` : ''}
       </div>`;
   }).join('');
 
@@ -1277,6 +1342,7 @@ async function renderIndicatorDetail() {
         <div class="flex items-center gap-2 mt-0.5 flex-wrap">
           ${!ind._isOwned && (ind.creator || ind.creatorName) ? `<span class="text-[10px] text-gray-500">by ${escapeHtml(ind.creator || ind.creatorName)}</span>` : ''}
           ${ind.sector ? `<span class="sector-chip">${escapeHtml(SECTORS[ind.sector]?.label || ind.sector)}</span>` : ''}
+          ${indicatorProtectionBadge(ind)}
           ${marketCount > 0 ? `<span class="text-[10px] text-gray-600">${marketCount} markets</span>` : ''}
           ${ind.fgEnabled ? '<span class="text-[10px] text-green-500/80">F&G blended</span>' : ''}
           <span class="text-[10px] text-gray-600">vs ${escapeHtml(refLabel)}</span>
@@ -1298,10 +1364,13 @@ async function renderIndicatorDetail() {
           Delete
         </button>
         ` : `
-        <button onclick="forkIndicator('${ind.id}')" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-400 bg-gray-800/60 border border-gray-700/40 rounded-lg hover:border-green-500/40 hover:text-green-400 transition-colors">
+        ${canForkIndicator(ind) ? `<button onclick="forkIndicator('${ind.id}')" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-400 bg-gray-800/60 border border-gray-700/40 rounded-lg hover:border-green-500/40 hover:text-green-400 transition-colors">
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 4h10v10H4zM10 10h10v10H10z"/></svg>
           Fork
-        </button>
+        </button>` : `<button onclick="protectedForkMessage()" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2h-1V9a5 5 0 00-10 0v2H6a2 2 0 00-2 2v6a2 2 0 002 2zm3-10V9a3 3 0 116 0v2"/></svg>
+          Protected
+        </button>`}
         `}
       </div>
     </div>
@@ -1326,11 +1395,15 @@ async function renderIndicatorDetail() {
       <div style="height:320px"><canvas id="detail-chart"></canvas></div>
     </div>
 
-	    ${marketCount > 0 ? `
+	    ${recipeProtected ? `
+	    <div class="app-surface rounded-xl p-5">
+	      <h3 class="text-sm font-medium text-gray-300 mb-2">Protected Recipe</h3>
+	      <p class="text-sm text-gray-500 leading-relaxed">This creator charges for API access, so the signal history, selected markets, and weightings are hidden from the public page. Use the paid endpoint to consume the indicator output without exposing its recipe.</p>
+	    </div>` : (marketCount > 0 ? `
 	    <div class="app-surface rounded-xl p-5">
 	      <h3 class="text-sm font-medium text-gray-300 mb-3">Markets <span class="text-gray-600 font-normal">(${marketCount})</span></h3>
 	      <div class="max-h-[400px] overflow-y-auto space-y-0.5">${marketsHtml}</div>
-	    </div>` : ''}
+	    </div>` : '')}
 
 	    <div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mt-5">
 	      <div class="app-surface rounded-xl p-5">
@@ -1349,7 +1422,7 @@ async function renderIndicatorDetail() {
 	        <div id="indicator-comments-list" class="max-h-[360px] overflow-y-auto"></div>
 	      </div>
 
-	      <div class="app-surface rounded-xl p-5">
+	      ${recipeProtected ? '' : `<div class="app-surface rounded-xl p-5">
 	        <div class="flex items-center justify-between gap-3 mb-4">
 	          <h3 class="text-sm font-medium text-gray-300">Related Markets</h3>
 	          <span class="text-[11px] text-gray-600">${relatedMarkets.length} suggestions</span>
@@ -1357,7 +1430,7 @@ async function renderIndicatorDetail() {
 	        <div class="max-h-[500px] overflow-y-auto">
 	          ${relatedHtml || '<div class="text-sm text-gray-500 py-5">No related markets found in the loaded dataset.</div>'}
 	        </div>
-	      </div>
+	      </div>`}
 	    </div>
 	  `;
 
@@ -2385,6 +2458,7 @@ function renderForkIndicatorResults(query = '') {
 
   const q = query.trim().toLowerCase();
   const items = (builderForkIndicators.length ? builderForkIndicators : getIndicatorsSync())
+    .filter(ind => canForkIndicator(ind))
     .filter(ind => {
       if (!q) return true;
       const sectorLabel = SECTORS[ind.sector || 'crypto']?.label || ind.sector || 'crypto';
@@ -2407,7 +2481,7 @@ function renderForkIndicatorResults(query = '') {
   results.innerHTML = items.map(ind => {
     const sector = ind.sector || 'crypto';
     const sectorLabel = SECTORS[sector]?.label || sector;
-    const marketCount = ind.markets ? Object.keys(ind.markets).length : 0;
+    const marketCount = getIndicatorMarketCount(ind);
     const categoryCount = ind.weights ? Object.entries(ind.weights).filter(([, v]) => Number(v) > 0).length : 0;
     const sourceCount = marketCount > 0
       ? `${marketCount} market${marketCount !== 1 ? 's' : ''}`
@@ -2437,6 +2511,7 @@ function renderForkIndicatorResults(query = '') {
 function selectForkIndicator(id) {
   const ind = builderForkIndicators.find(i => i.id === id) || getIndicatorsSync().find(i => i.id === id);
   if (!ind) return;
+  if (!canForkIndicator(ind)) { protectedForkMessage(); return; }
   closeForkIndicatorModal();
   forkFromData(ind, id);
 }
