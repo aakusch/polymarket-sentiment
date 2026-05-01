@@ -628,6 +628,8 @@ function renderSparkline(canvas, indicatorScores, priceScores) {
 // ═════════════════════════════════════════════════════════════════════════════
 
 let indicatorViewMode = (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(max-width: 720px)').matches) ? 'card' : 'table';
+let indicatorFilters = { query: '', sector: 'all', access: 'all' };
+
 function syncIndicatorViewButtons() {
   const tBtn = document.getElementById('ind-view-table');
   const cBtn = document.getElementById('ind-view-card');
@@ -635,9 +637,45 @@ function syncIndicatorViewButtons() {
   cBtn?.classList.toggle('active', indicatorViewMode === 'card');
 }
 
+function syncIndicatorControls() {
+  const search = document.getElementById('ind-search');
+  const clear = document.getElementById('ind-clear-search');
+  const access = document.getElementById('ind-access-filter');
+  if (search && search.value !== indicatorFilters.query) search.value = indicatorFilters.query;
+  clear?.classList.toggle('hidden', !indicatorFilters.query);
+  if (access && access.value !== indicatorFilters.access) access.value = indicatorFilters.access;
+  document.querySelectorAll('[data-ind-sector]').forEach(btn => {
+    btn.classList.toggle('active', btn.getAttribute('data-ind-sector') === indicatorFilters.sector);
+  });
+}
+
 function setIndicatorView(mode) {
   indicatorViewMode = mode;
   syncIndicatorViewButtons();
+  renderIndicatorsPage();
+}
+
+function setIndicatorSearch(value) {
+  indicatorFilters.query = String(value || '').trim();
+  syncIndicatorControls();
+  renderIndicatorsPage();
+}
+
+function setIndicatorSectorFilter(sector) {
+  indicatorFilters.sector = sector || 'all';
+  syncIndicatorControls();
+  renderIndicatorsPage();
+}
+
+function setIndicatorAccessFilter(access) {
+  indicatorFilters.access = access || 'all';
+  syncIndicatorControls();
+  renderIndicatorsPage();
+}
+
+function clearIndicatorFilters() {
+  indicatorFilters = { query: '', sector: 'all', access: 'all' };
+  syncIndicatorControls();
   renderIndicatorsPage();
 }
 
@@ -662,10 +700,96 @@ function renderIndicatorLoading() {
     </div>`;
 }
 
+function indicatorSearchText(ind) {
+  const sector = ind.sector || 'crypto';
+  return [
+    ind.name,
+    ind.creator,
+    ind.creatorName,
+    ind.asset,
+    sector,
+    SECTORS[sector]?.label,
+    isPaidIndicator(ind) ? 'protected paid api' : 'forkable open free',
+    ind._isOwned ? 'mine owned saved' : '',
+  ].map(v => String(v || '').toLowerCase()).join(' ');
+}
+
+function indicatorMatchesFilters(row) {
+  const ind = row.ind;
+  if (indicatorFilters.sector !== 'all' && (ind.sector || 'crypto') !== indicatorFilters.sector) return false;
+  if (indicatorFilters.access === 'protected' && !isPaidIndicator(ind)) return false;
+  if (indicatorFilters.access === 'open' && !canForkIndicator(ind)) return false;
+  if (indicatorFilters.access === 'mine' && !ind._isOwned) return false;
+  const q = indicatorFilters.query.toLowerCase();
+  if (q && !indicatorSearchText(ind).includes(q)) return false;
+  return true;
+}
+
+function compactNumber(n, digits = 0) {
+  const value = Number(n);
+  if (!Number.isFinite(value)) return '--';
+  if (Math.abs(value) >= 1000) return value.toLocaleString('en-US', { notation: 'compact', maximumFractionDigits: 1 });
+  return value.toLocaleString('en-US', { maximumFractionDigits: digits, minimumFractionDigits: digits });
+}
+
+function renderInsight(label, value, detail, tone = 'blue') {
+  const colors = {
+    blue: 'text-blue-300',
+    green: 'text-green-300',
+    amber: 'text-amber-300',
+    gray: 'text-gray-300',
+  };
+  return `
+    <div class="ind-insight">
+      <div class="text-[10px] text-gray-600 uppercase tracking-[0.16em]">${label}</div>
+      <div class="mt-2 text-2xl font-semibold ${colors[tone] || colors.blue} tabular-nums">${value}</div>
+      <div class="mt-1 text-xs text-gray-500 truncate">${detail}</div>
+    </div>`;
+}
+
+function renderIndicatorInsights(rankedAll, ranked) {
+  const el = document.getElementById('indicator-insights');
+  if (!el) return;
+  const withScores = rankedAll.filter(r => r.lastScore != null);
+  const avgScore = withScores.length
+    ? withScores.reduce((sum, r) => sum + r.lastScore, 0) / withScores.length
+    : null;
+  const protectedCount = rankedAll.filter(r => isPaidIndicator(r.ind)).length;
+  const predictiveLeaders = rankedAll.filter(r => (r.predictive?.score ?? 0) >= 60).length;
+  const top = [...rankedAll].filter(r => r.lastScore != null).sort((a, b) => b.lastScore - a.lastScore)[0];
+  const topLabel = top ? `${top.ind.name}` : 'No scored indicators yet';
+
+  el.innerHTML = [
+    renderInsight('Visible', compactNumber(ranked.length), `${rankedAll.length} total strategies`, 'blue'),
+    renderInsight('Avg score', avgScore == null ? '--' : avgScore.toFixed(1), `${withScores.length} scored signals`, avgScore != null && avgScore >= 60 ? 'green' : 'gray'),
+    renderInsight('Protected', compactNumber(protectedCount), 'paid API recipes', protectedCount > 0 ? 'amber' : 'gray'),
+    renderInsight('Predictive', compactNumber(predictiveLeaders), topLabel, predictiveLeaders > 0 ? 'green' : 'gray'),
+  ].join('');
+}
+
+function renderIndicatorSectorTabs(rankedAll) {
+  const el = document.getElementById('ind-sector-tabs');
+  if (!el) return;
+  const counts = rankedAll.reduce((acc, row) => {
+    const sector = row.ind.sector || 'crypto';
+    acc[sector] = (acc[sector] || 0) + 1;
+    return acc;
+  }, {});
+  const sectors = ['all', ...SECTOR_ORDER.filter(s => counts[s] > 0)];
+  el.innerHTML = sectors.map(sector => {
+    const label = sector === 'all' ? 'All' : (SECTORS[sector]?.label || sector);
+    const count = sector === 'all' ? rankedAll.length : counts[sector];
+    return `<button type="button" data-ind-sector="${sector}" onclick="setIndicatorSectorFilter('${sector}')" class="ind-filter-chip ${indicatorFilters.sector === sector ? 'active' : ''}">
+      <span>${label}</span><span class="text-[10px] text-gray-600 tabular-nums">${count || 0}</span>
+    </button>`;
+  }).join('');
+}
+
 async function renderIndicatorsPage() {
   const container = document.getElementById('indicators-sectors');
   if (!container) return;
   syncIndicatorViewButtons();
+  syncIndicatorControls();
   if (!container.dataset.ready) {
     container.setAttribute('aria-busy', 'true');
     container.innerHTML = renderIndicatorLoading();
@@ -682,10 +806,8 @@ async function renderIndicatorsPage() {
   const loadPromises = [...allSectors].filter(s => SECTORS[s]?.available).map(s => loadSectorData(s));
   await Promise.all(loadPromises);
 
-  const filtered = indicators;
-
   // Compute stats for each indicator
-  const ranked = filtered.map(ind => {
+  const rankedAll = indicators.map(ind => {
     const sectorData = sectorDataCache[ind.sector || 'crypto'];
     if (sectorData && canComputeIndicator(ind)) {
       const ts = computeIndicatorTimeseries(ind, sectorData);
@@ -698,6 +820,7 @@ async function renderIndicatorsPage() {
     }
     return { ind, ts: { dates: [], scores: [], prices: [] }, corr: null, dirAcc: null, predictive: null, deltas: {}, lastScore: getIndicatorScore(ind) };
   });
+  const ranked = rankedAll.filter(indicatorMatchesFilters);
 
   // Sort
   const sortBy = document.getElementById('ind-sort')?.value || 'score';
@@ -724,11 +847,19 @@ async function renderIndicatorsPage() {
     }
   });
 
+  renderIndicatorInsights(rankedAll, ranked);
+  renderIndicatorSectorTabs(rankedAll);
+  syncIndicatorControls();
+
   // Update count
   const countEl = document.getElementById('ind-count');
-  if (countEl) countEl.textContent = ranked.length > 0 ? `${ranked.length} indicator${ranked.length !== 1 ? 's' : ''}` : '';
+  if (countEl) {
+    countEl.textContent = ranked.length > 0
+      ? `${ranked.length}/${rankedAll.length}`
+      : `0/${rankedAll.length}`;
+  }
 
-  if (ranked.length === 0) {
+  if (rankedAll.length === 0) {
     container.innerHTML = `
       <div class="app-surface rounded-xl p-12 border-dashed text-center">
         <div class="w-12 h-12 mx-auto mb-4 rounded-full bg-gray-800/60 flex items-center justify-center">
@@ -740,6 +871,21 @@ async function renderIndicatorsPage() {
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
           Build Indicator
         </a>
+      </div>`;
+    container.dataset.ready = 'true';
+    container.removeAttribute('aria-busy');
+    return;
+  }
+
+  if (ranked.length === 0) {
+    container.innerHTML = `
+      <div class="app-surface rounded-xl p-10 border-dashed text-center">
+        <div class="w-12 h-12 mx-auto mb-4 rounded-full bg-gray-800/60 flex items-center justify-center">
+          <svg class="w-6 h-6 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.7" d="M3 4a1 1 0 011-1h16a1 1 0 01.8 1.6l-6.3 8.4V19a1 1 0 01-1.45.89l-3-1.5A1 1 0 019.5 17.5V13L3.2 4.6A1 1 0 013 4z"/></svg>
+        </div>
+        <div class="text-gray-300 font-medium mb-1">No matches</div>
+        <p class="text-gray-500 text-sm mb-5">Try a different sector, access type, or search term.</p>
+        <button onclick="clearIndicatorFilters()" class="inline-flex items-center gap-1.5 px-4 py-2 text-sm text-blue-200 bg-blue-500/10 border border-blue-500/25 rounded-lg hover:border-blue-400/50 transition-colors">Clear filters</button>
       </div>`;
     container.dataset.ready = 'true';
     container.removeAttribute('aria-busy');
@@ -903,7 +1049,7 @@ function renderIndicatorTableUnified(ranked) {
               <div class="text-[12px]">${fmtDelta(deltas['1M'])}</div>
             </td>
             <td class="py-4 px-3 pr-5 text-right align-middle" onclick="event.stopPropagation()">
-              <span class="inline-flex gap-1 opacity-0 group-hover:opacity-100 transition-all duration-200">
+              <span class="inline-flex gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-all duration-200">
                 <button onclick="openAlertModal('${ind.id}','${escapedName}')" class="ind-action text-gray-500 hover:text-blue-400" title="Set alert">${svgAlert}</button>
                 ${ind._isOwned ? `
                 <button onclick="editIndicator('${ind.id}')" class="ind-action text-gray-500 hover:text-blue-400" title="Edit">${svgEdit}</button>
@@ -958,7 +1104,7 @@ function renderIndicatorCards(ranked) {
               ${label ? `<span class="text-[10px] text-gray-600">${label}</span>` : ''}
             </div>
           </div>
-          <div class="flex gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-all duration-200" onclick="event.stopPropagation()">
+          <div class="flex gap-0.5 shrink-0 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-all duration-200" onclick="event.stopPropagation()">
             <button onclick="openAlertModal('${ind.id}','${escapedName}')" class="ind-action text-gray-500 hover:text-blue-400" title="Set alert">${svgAlertSm}</button>
             ${ind._isOwned ? `
             <button onclick="editIndicator('${ind.id}')" class="ind-action text-gray-500 hover:text-blue-400" title="Edit">${svgEditSm}</button>

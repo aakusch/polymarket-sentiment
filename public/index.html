@@ -105,6 +105,30 @@
     .view-toggle { display: inline-flex; border-radius: 8px; padding: 2px; background: rgba(55,65,81,0.4); }
     .view-toggle button { padding: 4px 12px; border-radius: 6px; font-size: 11px; transition: all 0.2s; color: #9ca3af; }
     .view-toggle button.active { background: rgba(96,165,250,0.15); color: #93c5fd; }
+    .ind-filter-chip {
+      display: inline-flex; align-items: center; gap: 6px; height: 30px;
+      padding: 0 10px; border-radius: 7px; font-size: 11px; color: #9ca3af;
+      background: rgba(31,41,55,.42); border: 1px solid rgba(75,85,99,.34);
+      transition: color .16s, border-color .16s, background .16s;
+      white-space: nowrap;
+    }
+    .ind-filter-chip:hover { color: #d1d5db; border-color: rgba(96,165,250,.34); }
+    .ind-filter-chip.active {
+      color: #bfdbfe; background: rgba(37,99,235,.13); border-color: rgba(96,165,250,.36);
+    }
+    .ind-insight {
+      min-height: 86px;
+      background: linear-gradient(180deg, rgba(31,41,55,.28), rgba(17,24,39,.36));
+      border: 1px solid rgba(75,85,99,.32);
+      border-radius: 10px;
+      padding: 14px;
+    }
+    .ind-search {
+      background: rgba(3,7,18,.42);
+      border: 1px solid rgba(75,85,99,.42);
+      border-radius: 9px;
+    }
+    .ind-search:focus-within { border-color: rgba(96,165,250,.45); box-shadow: 0 0 0 3px rgba(37,99,235,.08); }
     /* Stat pill in cards */
     .stat-pill { display: inline-flex; align-items: center; gap: 3px; padding: 3px 9px; border-radius: 6px; font-size: 11px; font-variant-numeric: tabular-nums; background: rgba(255,255,255,0.035); border: 1px solid rgba(255,255,255,0.06); color: #d1d5db; }
     /* Custom scrollbar for market picker */
@@ -168,31 +192,56 @@
 
     <!-- INDICATORS PAGE -->
     <div id="page-indicators" class="page space-y-6">
-      <!-- Header + Toolbar -->
-      <div class="flex items-center justify-between flex-wrap gap-3">
-        <div class="flex items-center gap-3">
-          <h1 class="text-xl font-semibold text-gray-100">Indicators</h1>
-          <div class="view-toggle">
-            <button onclick="setIndicatorView('table')" id="ind-view-table" class="active" title="Table view">
-              <svg class="w-3.5 h-3.5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
-            </button>
-            <button onclick="setIndicatorView('card')" id="ind-view-card" title="Card view">
-              <svg class="w-3.5 h-3.5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1V5zm10 0a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4zm10 0a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z"/></svg>
+      <div class="app-surface rounded-xl p-5 sm:p-6">
+        <div class="flex items-start justify-between gap-5 flex-wrap">
+          <div class="min-w-0">
+            <div class="text-[11px] text-blue-300/80 uppercase tracking-[0.18em] mb-2">Strategy Marketplace</div>
+            <h1 class="text-2xl sm:text-3xl font-semibold text-gray-100 tracking-tight">Indicators</h1>
+            <p class="mt-2 text-sm text-gray-500 max-w-2xl leading-relaxed">Discover public sentiment strategies, compare signal quality, and open protected previews before consuming them through the API.</p>
+          </div>
+          <a href="#builder" class="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-500 active:scale-[0.97] transition-all shadow-lg shadow-blue-600/20">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+            New Indicator
+          </a>
+        </div>
+        <div id="indicator-insights" class="grid grid-cols-2 lg:grid-cols-4 gap-3 mt-5"></div>
+      </div>
+
+      <div class="app-surface rounded-xl p-3 sm:p-4">
+        <div class="grid grid-cols-1 lg:grid-cols-[minmax(240px,1fr)_auto] gap-3 items-center">
+          <div class="ind-search flex items-center gap-2 px-3 h-10">
+            <svg class="w-4 h-4 text-gray-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M21 21l-4.35-4.35M10.5 18a7.5 7.5 0 110-15 7.5 7.5 0 010 15z"/></svg>
+            <input id="ind-search" oninput="setIndicatorSearch(this.value)" placeholder="Search name, creator, sector, asset..." class="w-full bg-transparent text-sm text-gray-200 placeholder-gray-600 outline-none">
+            <button id="ind-clear-search" onclick="setIndicatorSearch('')" class="hidden text-gray-600 hover:text-gray-300" title="Clear search">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
             </button>
           </div>
-          <select id="ind-sort" onchange="renderIndicatorsPage()" class="px-2.5 py-1.5 text-[11px] bg-gray-800/60 border border-gray-700/40 rounded-lg text-gray-400 cursor-pointer focus:outline-none focus:border-blue-500/40 transition-colors">
-            <option value="score">Sort: Score</option>
-            <option value="correlation">Sort: Correlation</option>
-            <option value="predictive">Sort: Predictive</option>
-            <option value="newest">Sort: Newest</option>
-            <option value="name">Sort: Name</option>
-          </select>
-          <span id="ind-count" class="text-[11px] text-gray-600 tabular-nums hidden sm:inline"></span>
+          <div class="flex items-center gap-2 flex-wrap lg:justify-end">
+            <select id="ind-access-filter" onchange="setIndicatorAccessFilter(this.value)" class="px-2.5 py-2 text-[11px] bg-gray-800/60 border border-gray-700/40 rounded-lg text-gray-400 cursor-pointer focus:outline-none focus:border-blue-500/40 transition-colors">
+              <option value="all">All access</option>
+              <option value="open">Forkable</option>
+              <option value="protected">Protected</option>
+              <option value="mine">Mine</option>
+            </select>
+            <select id="ind-sort" onchange="renderIndicatorsPage()" class="px-2.5 py-2 text-[11px] bg-gray-800/60 border border-gray-700/40 rounded-lg text-gray-400 cursor-pointer focus:outline-none focus:border-blue-500/40 transition-colors">
+              <option value="score">Score</option>
+              <option value="correlation">Correlation</option>
+              <option value="predictive">Predictive</option>
+              <option value="newest">Newest</option>
+              <option value="name">Name</option>
+            </select>
+            <div class="view-toggle h-9">
+              <button onclick="setIndicatorView('table')" id="ind-view-table" class="active" title="Table view">
+                <svg class="w-3.5 h-3.5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+              </button>
+              <button onclick="setIndicatorView('card')" id="ind-view-card" title="Card view">
+                <svg class="w-3.5 h-3.5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1V5zm10 0a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4zm10 0a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z"/></svg>
+              </button>
+            </div>
+            <span id="ind-count" class="text-[11px] text-gray-600 tabular-nums min-w-[82px]"></span>
+          </div>
         </div>
-        <a href="#builder" class="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-500 active:scale-[0.97] transition-all shadow-lg shadow-blue-600/20">
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-          New Indicator
-        </a>
+        <div id="ind-sector-tabs" class="flex items-center gap-2 overflow-x-auto mt-3 pb-1"></div>
       </div>
 
       <!-- Unified indicator list -->
