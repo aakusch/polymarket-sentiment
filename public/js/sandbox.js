@@ -629,6 +629,9 @@ function renderSparkline(canvas, indicatorScores, priceScores) {
 
 let indicatorViewMode = (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(max-width: 720px)').matches) ? 'card' : 'table';
 let indicatorFilters = { query: '', sector: 'all', access: 'all' };
+let indicatorLiveTimer = null;
+let indicatorLiveSignature = '';
+let indicatorLastCheckedAt = null;
 
 function syncIndicatorViewButtons() {
   const tBtn = document.getElementById('ind-view-table');
@@ -732,7 +735,19 @@ function compactNumber(n, digits = 0) {
   return value.toLocaleString('en-US', { maximumFractionDigits: digits, minimumFractionDigits: digits });
 }
 
-function renderInsight(label, value, detail, tone = 'blue') {
+function engagementScore(ind = {}) {
+  return Number(ind.viewCount || 0) + Number(ind.commentCount || 0) * 4 + Number(ind.forkCount || 0) * 3;
+}
+
+function formatLiveTime(date) {
+  if (!date) return 'starting';
+  const seconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000));
+  if (seconds < 8) return 'just now';
+  if (seconds < 60) return `${seconds}s ago`;
+  return `${Math.floor(seconds / 60)}m ago`;
+}
+
+function renderInsight(label, value, detail, tone = 'blue', live = false) {
   const colors = {
     blue: 'text-blue-300',
     green: 'text-green-300',
@@ -740,8 +755,8 @@ function renderInsight(label, value, detail, tone = 'blue') {
     gray: 'text-gray-300',
   };
   return `
-    <div class="ind-insight">
-      <div class="text-[10px] text-gray-600 uppercase tracking-[0.16em]">${label}</div>
+    <div class="ind-insight ${live ? 'live' : ''}">
+      <div class="text-[10px] text-gray-600 uppercase tracking-[0.16em] flex items-center gap-2">${live ? '<span class="alive-dot"></span>' : ''}${label}</div>
       <div class="mt-2 text-2xl font-semibold ${colors[tone] || colors.blue} tabular-nums">${value}</div>
       <div class="mt-1 text-xs text-gray-500 truncate">${detail}</div>
     </div>`;
@@ -756,6 +771,7 @@ function renderIndicatorInsights(rankedAll, ranked) {
     : null;
   const protectedCount = rankedAll.filter(r => isPaidIndicator(r.ind)).length;
   const predictiveLeaders = rankedAll.filter(r => (r.predictive?.score ?? 0) >= 60).length;
+  const totalEngagement = rankedAll.reduce((sum, r) => sum + engagementScore(r.ind), 0);
   const top = [...rankedAll].filter(r => r.lastScore != null).sort((a, b) => b.lastScore - a.lastScore)[0];
   const topLabel = top ? `${top.ind.name}` : 'No scored indicators yet';
 
@@ -763,8 +779,45 @@ function renderIndicatorInsights(rankedAll, ranked) {
     renderInsight('Visible', compactNumber(ranked.length), `${rankedAll.length} total strategies`, 'blue'),
     renderInsight('Avg score', avgScore == null ? '--' : avgScore.toFixed(1), `${withScores.length} scored signals`, avgScore != null && avgScore >= 60 ? 'green' : 'gray'),
     renderInsight('Protected', compactNumber(protectedCount), 'paid API recipes', protectedCount > 0 ? 'amber' : 'gray'),
-    renderInsight('Predictive', compactNumber(predictiveLeaders), topLabel, predictiveLeaders > 0 ? 'green' : 'gray'),
+    renderInsight('Live pulse', compactNumber(totalEngagement), `checked ${formatLiveTime(indicatorLastCheckedAt)}`, totalEngagement > 0 ? 'green' : 'gray', true),
   ].join('');
+}
+
+function renderIndicatorActivity(rankedAll) {
+  const el = document.getElementById('indicator-activity');
+  if (!el) return;
+  const active = [...rankedAll]
+    .filter(r => engagementScore(r.ind) > 0 || r.ind.publishedAt || r.ind.createdAt)
+    .sort((a, b) => {
+      const engagementDelta = engagementScore(b.ind) - engagementScore(a.ind);
+      if (engagementDelta !== 0) return engagementDelta;
+      return String(b.ind.publishedAt || b.ind.createdAt || '').localeCompare(String(a.ind.publishedAt || a.ind.createdAt || ''));
+    })
+    .slice(0, 5);
+
+  if (!active.length) {
+    el.innerHTML = `
+      <div class="activity-rail">
+        <div class="activity-item"><span class="alive-dot"></span><span>Watching for new views, comments, forks, and published strategies</span></div>
+      </div>`;
+    return;
+  }
+
+  el.innerHTML = `
+    <div class="activity-rail flex items-center overflow-x-auto">
+      <div class="activity-item text-green-300"><span class="alive-dot"></span><span>Live activity</span></div>
+      ${active.map(({ ind }) => {
+        const pieces = [];
+        if (Number(ind.viewCount || 0) > 0) pieces.push(`${compactNumber(ind.viewCount)} views`);
+        if (Number(ind.commentCount || 0) > 0) pieces.push(`${compactNumber(ind.commentCount)} comments`);
+        if (Number(ind.forkCount || 0) > 0) pieces.push(`${compactNumber(ind.forkCount)} forks`);
+        if (isPaidIndicator(ind)) pieces.push('protected preview');
+        return `<button type="button" onclick="location.hash='#indicator?id=${ind.id}'" class="activity-item hover:text-gray-200 transition-colors">
+          <span class="max-w-[160px] truncate text-gray-300">${escapeHtml(ind.name || 'Untitled')}</span>
+          <span class="text-gray-600">${escapeHtml(pieces.slice(0, 2).join(' · ') || 'newly listed')}</span>
+        </button>`;
+      }).join('')}
+    </div>`;
 }
 
 function renderIndicatorSectorTabs(rankedAll) {
@@ -783,6 +836,43 @@ function renderIndicatorSectorTabs(rankedAll) {
       <span>${label}</span><span class="text-[10px] text-gray-600 tabular-nums">${count || 0}</span>
     </button>`;
   }).join('');
+}
+
+function indicatorEngagementSignature(items = []) {
+  return items
+    .map(row => {
+      const ind = row.ind || row;
+      return [ind.id, ind.viewCount || 0, ind.commentCount || 0, ind.forkCount || 0].join(':');
+    })
+    .sort()
+    .join('|');
+}
+
+function startIndicatorLiveUpdates(rankedAll = []) {
+  indicatorLastCheckedAt = new Date();
+  const publicRows = rankedAll.filter(row => !row.ind?._isOwned || row.ind?.isPublic !== false);
+  indicatorLiveSignature = indicatorEngagementSignature(publicRows);
+  if (indicatorLiveTimer) return;
+  indicatorLiveTimer = setInterval(async () => {
+    if ((location.hash || '#indicators').split('?')[0] !== '#indicators') return;
+    try {
+      const res = await fetch('/api/indicators/public?limit=100&sort=newest', { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = await res.json();
+      const nextSignature = indicatorEngagementSignature(data.indicators || []);
+      indicatorLastCheckedAt = new Date();
+      if (nextSignature && nextSignature !== indicatorLiveSignature) {
+        indicatorLiveSignature = nextSignature;
+        _indicatorCache = null;
+        renderIndicatorsPage();
+      } else {
+        const ranked = (_indicatorCache || []).map(ind => ({ ind }));
+        renderIndicatorActivity(ranked);
+        const liveDetail = document.querySelector('#indicator-insights .ind-insight.live .text-xs');
+        if (liveDetail) liveDetail.textContent = `checked ${formatLiveTime(indicatorLastCheckedAt)}`;
+      }
+    } catch (_) {}
+  }, 45000);
 }
 
 async function renderIndicatorsPage() {
@@ -847,8 +937,11 @@ async function renderIndicatorsPage() {
     }
   });
 
+  if (!indicatorLastCheckedAt) indicatorLastCheckedAt = new Date();
   renderIndicatorInsights(rankedAll, ranked);
+  renderIndicatorActivity(rankedAll);
   renderIndicatorSectorTabs(rankedAll);
+  startIndicatorLiveUpdates(rankedAll);
   syncIndicatorControls();
 
   // Update count
@@ -949,6 +1042,18 @@ function fmtDelta(d) {
   return `<span style="color:${color}">${sign}${d.toFixed(1)}</span>`;
 }
 
+function renderEngagementPills(ind = {}) {
+  const views = Number(ind.viewCount || 0);
+  const comments = Number(ind.commentCount || 0);
+  const forks = Number(ind.forkCount || 0);
+  const score = engagementScore(ind);
+  const pills = [];
+  if (views > 0) pills.push(`<span class="engagement-pill ${score >= 20 ? 'hot' : ''}" title="Views">${compactNumber(views)}</span>`);
+  if (comments > 0) pills.push(`<span class="engagement-pill hot" title="Comments">${compactNumber(comments)} c</span>`);
+  if (forks > 0) pills.push(`<span class="engagement-pill" title="Forks">${compactNumber(forks)} f</span>`);
+  return pills.join('');
+}
+
 function scoreRingSvg(score, color, size = 44) {
   const fontSize = size <= 44 ? 13 : Math.round(size * 0.28);
   const stroke = size <= 44 ? 3 : 4;
@@ -1005,6 +1110,7 @@ function renderIndicatorTableUnified(ranked) {
     const label = lastScore != null ? scoreLabel(lastScore) : '';
     const sectorTag = (ind.sector && ind.sector !== 'crypto') ? `<span class="sector-chip shrink-0">${SECTORS[ind.sector]?.label || ind.sector}</span>` : '';
     const protectionBadge = indicatorProtectionBadge(ind);
+    const engagementPills = renderEngagementPills(ind);
 
     html += `
           <tr class="group ind-row-anim cursor-pointer" style="animation-delay:${idx * 40}ms" onclick="location.hash='#indicator?id=${ind.id}'">
@@ -1029,6 +1135,7 @@ function renderIndicatorTableUnified(ranked) {
                     ${marketCount > 0 ? `<span class="text-[10px] text-gray-500">${marketCount} markets</span>` : ''}
                     ${ind.fgEnabled ? '<span class="text-[10px] text-green-500/80">F&G</span>' : ''}
                     ${label ? `<span class="text-[10px] text-gray-600">${label}</span>` : ''}
+                    ${engagementPills}
                   </div>
                 </div>
               </div>
@@ -1088,6 +1195,7 @@ function renderIndicatorCards(ranked) {
     const label = lastScore != null ? scoreLabel(lastScore) : '';
     const sectorTag = (ind.sector && ind.sector !== 'crypto') ? `<span class="sector-chip">${SECTORS[ind.sector]?.label || ind.sector}</span>` : '';
     const protectionBadge = indicatorProtectionBadge(ind);
+    const engagementPills = renderEngagementPills(ind);
 
     html += `
       <div class="group ind-card-anim app-surface rounded-xl hover:border-gray-600/60 transition-all duration-200 hover:bg-gray-800/50 hover:shadow-lg hover:shadow-black/20 overflow-hidden flex flex-col cursor-pointer" style="animation-delay:${idx * 50}ms" onclick="location.hash='#indicator?id=${ind.id}'">
@@ -1102,6 +1210,7 @@ function renderIndicatorCards(ranked) {
               ${marketCount > 0 ? `<span class="text-[10px] text-gray-500">${marketCount} market${marketCount !== 1 ? 's' : ''}</span>` : ''}
               ${ind.fgEnabled ? '<span class="text-[10px] text-green-500/80">F&G</span>' : ''}
               ${label ? `<span class="text-[10px] text-gray-600">${label}</span>` : ''}
+              ${engagementPills}
             </div>
           </div>
           <div class="flex gap-0.5 shrink-0 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-all duration-200" onclick="event.stopPropagation()">
@@ -1257,7 +1366,7 @@ async function loadIndicatorComments(id) {
       return Array.isArray(data.comments) ? data.comments : [];
     }
   } catch (_) {}
-  return getLocalIndicatorEngagement(id).comments || [];
+  return [];
 }
 
 function renderIndicatorComments(id, comments) {
@@ -1286,7 +1395,6 @@ async function submitIndicatorComment(id) {
   const bodyEl = document.getElementById('indicator-comment-body');
   const errEl = document.getElementById('indicator-comment-error');
   const body = bodyEl?.value.trim() || '';
-  const authorName = currentCommentAuthorLabel();
   if (errEl) errEl.textContent = '';
   if (body.length < 2) {
     if (errEl) errEl.textContent = 'Write a little more before posting.';
@@ -1298,6 +1406,7 @@ async function submitIndicatorComment(id) {
   }
 
   let comments = [];
+  let errorMessage = 'Could not post this comment. Check your connection and try again.';
   try {
     const res = await fetch('/api/indicators/' + id + '/comments', {
       method: 'POST',
@@ -1311,19 +1420,13 @@ async function submitIndicatorComment(id) {
       renderIndicatorComments(id, comments);
       return;
     }
+    try {
+      const data = await res.json();
+      errorMessage = data.error || errorMessage;
+    } catch (_) {}
   } catch (_) {}
 
-  const local = getLocalIndicatorEngagement(id);
-  const comment = {
-    id: 'local-' + Date.now(),
-    body,
-    authorName,
-    createdAt: new Date().toISOString(),
-  };
-  local.comments = [comment, ...(local.comments || [])].slice(0, 50);
-  saveLocalIndicatorEngagement(id, local);
-  if (bodyEl) bodyEl.value = '';
-  renderIndicatorComments(id, local.comments);
+  if (errEl) errEl.textContent = errorMessage;
 }
 
 function indicatorActiveCategories(ind, marketIndex) {

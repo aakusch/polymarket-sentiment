@@ -302,6 +302,10 @@ async function handleComments(req, res, id) {
     const authorName = 'Guest';
     if (body.length < 2) return res.status(400).json({ error: 'Comment is too short' });
     if (body.length > 1000) return res.status(400).json({ error: 'Comment is too long' });
+    const rate = await checkCommentRateLimit(sql, id, auth);
+    if (!rate.allowed) {
+      return res.status(429).json({ error: rate.error, retryAfter: rate.retryAfter });
+    }
     const rows = await sql`
       INSERT INTO indicator_comments (indicator_id, user_id, author_name, body)
       VALUES (${id}, ${auth?.id || null}, ${auth ? null : authorName}, ${body})
@@ -463,4 +467,34 @@ function shortWallet(wallet) {
 
 function commentAuthorLabel(row = {}) {
   return shortWallet(row.user_wallet) || (row.user_id ? 'Account' : (row.author_name || 'Guest'));
+}
+
+async function checkCommentRateLimit(sql, indicatorId, auth) {
+  if (auth?.id) {
+    const rows = await sql`
+      SELECT COUNT(*)::int AS count
+      FROM indicator_comments
+      WHERE indicator_id = ${indicatorId}
+        AND user_id = ${auth.id}
+        AND created_at > now() - interval '1 minute'
+    `;
+    if ((rows[0]?.count || 0) >= 3) {
+      return { allowed: false, error: 'Slow down before posting another comment', retryAfter: 60 };
+    }
+    return { allowed: true };
+  }
+
+  const rows = await sql`
+    SELECT
+      COUNT(*) FILTER (WHERE created_at > now() - interval '1 minute')::int AS minute_count,
+      COUNT(*) FILTER (WHERE created_at > now() - interval '1 hour')::int AS hour_count
+    FROM indicator_comments
+    WHERE indicator_id = ${indicatorId}
+      AND user_id IS NULL
+      AND deleted_at IS NULL
+  `;
+  if ((rows[0]?.minute_count || 0) >= 5 || (rows[0]?.hour_count || 0) >= 30) {
+    return { allowed: false, error: 'Guest comments are temporarily rate limited', retryAfter: 60 };
+  }
+  return { allowed: true };
 }

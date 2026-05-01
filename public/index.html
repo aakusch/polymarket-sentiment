@@ -122,6 +122,15 @@
       border: 1px solid rgba(75,85,99,.32);
       border-radius: 10px;
       padding: 14px;
+      position: relative;
+      overflow: hidden;
+    }
+    .ind-insight.live::after {
+      content: ""; position: absolute; inset: 0;
+      background: linear-gradient(110deg, transparent 0%, rgba(96,165,250,.06) 44%, transparent 72%);
+      transform: translateX(-100%);
+      animation: aliveSweep 7s ease-in-out infinite;
+      pointer-events: none;
     }
     .ind-search {
       background: rgba(3,7,18,.42);
@@ -129,6 +138,31 @@
       border-radius: 9px;
     }
     .ind-search:focus-within { border-color: rgba(96,165,250,.45); box-shadow: 0 0 0 3px rgba(37,99,235,.08); }
+    .alive-dot {
+      width: 7px; height: 7px; border-radius: 999px; background: #22c55e;
+      box-shadow: 0 0 0 0 rgba(34,197,94,.34);
+      animation: livePulse 2.8s ease-out infinite;
+    }
+    .activity-rail {
+      background: rgba(3,7,18,.22);
+      border: 1px solid rgba(75,85,99,.24);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    .activity-item {
+      display: inline-flex; align-items: center; gap: 8px; min-height: 34px;
+      padding: 0 12px; border-right: 1px solid rgba(75,85,99,.22);
+      color: #9ca3af; font-size: 11px; white-space: nowrap;
+    }
+    .engagement-pill {
+      display: inline-flex; align-items: center; gap: 4px; height: 17px;
+      padding: 0 6px; border-radius: 5px;
+      background: rgba(255,255,255,.035); border: 1px solid rgba(255,255,255,.055);
+      color: #9ca3af; font-size: 10px; font-variant-numeric: tabular-nums;
+    }
+    .engagement-pill.hot { color: #fbbf24; border-color: rgba(251,191,36,.16); background: rgba(251,191,36,.07); }
+    @keyframes aliveSweep { 0%, 70% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+    @keyframes livePulse { 0% { box-shadow: 0 0 0 0 rgba(34,197,94,.32); } 70%, 100% { box-shadow: 0 0 0 9px rgba(34,197,94,0); } }
     /* Stat pill in cards */
     .stat-pill { display: inline-flex; align-items: center; gap: 3px; padding: 3px 9px; border-radius: 6px; font-size: 11px; font-variant-numeric: tabular-nums; background: rgba(255,255,255,0.035); border: 1px solid rgba(255,255,255,0.06); color: #d1d5db; }
     /* Custom scrollbar for market picker */
@@ -205,6 +239,7 @@
           </a>
         </div>
         <div id="indicator-insights" class="grid grid-cols-2 lg:grid-cols-4 gap-3 mt-5"></div>
+        <div id="indicator-activity" class="mt-4"></div>
       </div>
 
       <div class="app-surface rounded-xl p-3 sm:p-4">
