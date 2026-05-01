@@ -202,6 +202,18 @@ function protectedForkMessage() {
   alert('This is a paid protected indicator. Its recipe cannot be forked or copied.');
 }
 
+function shortWalletLabel(wallet) {
+  if (!wallet) return null;
+  const w = String(wallet);
+  return w.length > 12 ? `${w.slice(0, 4)}..${w.slice(-4)}` : w;
+}
+
+function currentCommentAuthorLabel() {
+  if (authState.user?.wallet) return shortWalletLabel(authState.user.wallet);
+  if (authState.token) return 'Account';
+  return 'Guest';
+}
+
 let _marketHistoryIndexCache = null;
 
 function invalidateMarketHistoryIndex() {
@@ -1126,10 +1138,9 @@ function renderIndicatorComments(id, comments) {
 
 async function submitIndicatorComment(id) {
   const bodyEl = document.getElementById('indicator-comment-body');
-  const authorEl = document.getElementById('indicator-comment-author');
   const errEl = document.getElementById('indicator-comment-error');
   const body = bodyEl?.value.trim() || '';
-  const authorName = authorEl?.value.trim() || 'Anonymous';
+  const authorName = currentCommentAuthorLabel();
   if (errEl) errEl.textContent = '';
   if (body.length < 2) {
     if (errEl) errEl.textContent = 'Write a little more before posting.';
@@ -1145,7 +1156,7 @@ async function submitIndicatorComment(id) {
     const res = await fetch('/api/indicators/' + id + '/comments', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ body, authorName }),
+      body: JSON.stringify({ body }),
     });
     if (res.ok) {
       const data = await res.json();
@@ -1212,6 +1223,58 @@ function getRelatedMarketSuggestions(ind, limit = 8) {
     .slice(0, limit);
 }
 
+function getProtectedPreviewMarkets(ind, limit = 4) {
+  const preview = Array.isArray(ind.previewMarkets) ? ind.previewMarkets : [];
+  const marketIndex = getMarketHistoryIndex();
+  return preview.slice(0, limit).map((entry, idx) => {
+    const mid = typeof entry === 'string' ? entry : entry?.id;
+    const meta = mid ? marketIndex[mid] : null;
+    return {
+      id: mid || `preview-${idx}`,
+      name: meta?.q || mid || 'Sample market',
+      cat: meta?.cat || null,
+      prob: meta?.prob ?? null,
+    };
+  });
+}
+
+function renderProtectedRecipePreview(ind) {
+  const previews = getProtectedPreviewMarkets(ind, 4);
+  const hiddenCount = Math.max(0, getIndicatorMarketCount(ind) - previews.length);
+  const rows = previews.map((m, idx) => {
+    const prob = m.prob != null ? `${(m.prob * 100).toFixed(0)}%` : '--';
+    return `
+      <div class="flex items-start gap-3 py-3 border-b border-gray-800/50 last:border-0">
+        <div class="flex-1 min-w-0">
+          <div class="text-sm text-gray-300 leading-snug truncate">${escapeHtml(m.name)}</div>
+          <div class="mt-1 flex items-center gap-2 flex-wrap">
+            ${m.cat ? `<span class="text-[10px] text-gray-500">${escapeHtml(m.cat.replace(/_/g, ' '))}</span>` : ''}
+            <span class="text-[10px] text-gray-500">prob ${prob}</span>
+            <span class="text-[10px] text-amber-300/80">sample ${idx + 1}</span>
+          </div>
+        </div>
+        <div class="shrink-0 min-w-20 text-right">
+          <div class="text-[10px] text-gray-600 uppercase tracking-wide">Weight</div>
+          <div class="mt-1 h-5 w-16 rounded bg-gray-800/80 border border-gray-700/50 overflow-hidden">
+            <div class="h-full bg-gray-600/70 blur-[3px]" style="width:${idx % 2 ? 62 : 78}%"></div>
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+
+  return `
+    <div class="app-surface rounded-xl p-5">
+      <div class="flex items-center justify-between gap-3 mb-4">
+        <h3 class="text-sm font-medium text-gray-300">Sneak Peek</h3>
+        <span class="text-[11px] text-gray-600">${hiddenCount} hidden</span>
+      </div>
+      ${rows || '<div class="text-sm text-gray-500 py-4">Market preview unavailable for this indicator.</div>'}
+      <div class="mt-4 rounded-lg border border-amber-500/15 bg-amber-500/5 px-3 py-2 text-xs text-amber-100/80 leading-relaxed">
+        Market names are sampled; exact weights, inversions, and the rest of the recipe stay hidden.
+      </div>
+    </div>`;
+}
+
 async function forkIndicatorWithMarket(indicatorId, marketId) {
   const indicators = await getIndicators();
   let ind = indicators.find(i => i.id === indicatorId);
@@ -1237,7 +1300,7 @@ async function renderIndicatorDetail() {
   if (detailChartInstance) { detailChartInstance.destroy(); detailChartInstance = null; }
 
   const indicators = await getIndicators();
-  const ind = indicators.find(i => i.id === id);
+  let ind = indicators.find(i => i.id === id);
   if (!ind) {
     container.innerHTML = '<div class="text-center py-12"><p class="text-gray-500">Indicator not found</p><a href="#indicators" class="text-blue-400 text-sm mt-2 inline-block">Back to indicators</a></div>';
     return;
@@ -1245,8 +1308,15 @@ async function renderIndicatorDetail() {
 
   const sector = ind.sector || 'crypto';
   const recipeProtected = isRecipeProtected(ind);
+  if (recipeProtected && (!Array.isArray(ind.previewMarkets) || ind.previewMarkets.length === 0)) {
+    try {
+      const res = await fetch('/api/indicators/' + id);
+      if (res.ok) ind = { ...ind, ...(await res.json()), _isOwned: ind._isOwned };
+    } catch (_) {}
+  }
   if (recipeProtected) {
     await ensureSectorsLoaded([sector]);
+    await loadAssetData(sector, ind.asset);
   } else if (typeof ensureAllSectorAssetsLoaded === 'function') {
     await ensureAllSectorAssetsLoaded(SECTOR_ORDER);
   } else {
@@ -1395,11 +1465,7 @@ async function renderIndicatorDetail() {
       <div style="height:320px"><canvas id="detail-chart"></canvas></div>
     </div>
 
-	    ${recipeProtected ? `
-	    <div class="app-surface rounded-xl p-5">
-	      <h3 class="text-sm font-medium text-gray-300 mb-2">Protected Recipe</h3>
-	      <p class="text-sm text-gray-500 leading-relaxed">This creator charges for API access, so the signal history, selected markets, and weightings are hidden from the public page. Use the paid endpoint to consume the indicator output without exposing its recipe.</p>
-	    </div>` : (marketCount > 0 ? `
+	    ${recipeProtected ? renderProtectedRecipePreview(ind) : (marketCount > 0 ? `
 	    <div class="app-surface rounded-xl p-5">
 	      <h3 class="text-sm font-medium text-gray-300 mb-3">Markets <span class="text-gray-600 font-normal">(${marketCount})</span></h3>
 	      <div class="max-h-[400px] overflow-y-auto space-y-0.5">${marketsHtml}</div>
@@ -1412,7 +1478,7 @@ async function renderIndicatorDetail() {
 	          <span class="text-[11px] text-gray-600"><span id="indicator-comment-total">${comments.length}</span> total</span>
 	        </div>
 	        <div class="space-y-3 mb-4">
-	          ${!authState.token ? `<input id="indicator-comment-author" maxlength="80" class="w-full bg-gray-950/60 border border-gray-800 rounded-lg px-3 py-2 text-sm text-gray-300 outline-none focus:border-blue-500/50" placeholder="Display name">` : ''}
+	          <div class="text-xs text-gray-500">Posting as <span class="text-gray-300">${escapeHtml(currentCommentAuthorLabel())}</span></div>
 	          <textarea id="indicator-comment-body" maxlength="1000" rows="3" class="w-full bg-gray-950/60 border border-gray-800 rounded-lg px-3 py-2 text-sm text-gray-300 outline-none focus:border-blue-500/50 resize-none" placeholder="Add a comment"></textarea>
 	          <div class="flex items-center justify-between gap-3">
 	            <div id="indicator-comment-error" class="text-xs text-red-400"></div>

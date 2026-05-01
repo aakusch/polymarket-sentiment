@@ -8,6 +8,7 @@ const {
   hasPaidPricing,
   marketCountFromRow,
   minBundlePrice,
+  previewMarketsFromRow,
   publicIndicatorPayload,
 } = require('../_lib/indicatorPrivacy');
 
@@ -278,7 +279,7 @@ async function handleComments(req, res, id) {
 
   if (req.method === 'GET') {
     const rows = await sql`
-      SELECT c.id, c.body, c.author_name, c.created_at, u.display_name AS user_name
+      SELECT c.id, c.body, c.author_name, c.created_at, c.user_id, u.wallet_address AS user_wallet
       FROM indicator_comments c
       LEFT JOIN users u ON c.user_id = u.id
       WHERE c.indicator_id = ${id} AND c.deleted_at IS NULL
@@ -289,7 +290,7 @@ async function handleComments(req, res, id) {
       comments: rows.map(r => ({
         id: r.id,
         body: r.body,
-        authorName: r.user_name || r.author_name || 'Anonymous',
+        authorName: commentAuthorLabel(r),
         createdAt: r.created_at,
       })),
     });
@@ -298,13 +299,13 @@ async function handleComments(req, res, id) {
   if (req.method === 'POST') {
     const auth = authenticate(req);
     const body = String(req.body?.body || '').trim();
-    const authorName = String(req.body?.authorName || '').trim().slice(0, 80) || 'Anonymous';
+    const authorName = 'Guest';
     if (body.length < 2) return res.status(400).json({ error: 'Comment is too short' });
     if (body.length > 1000) return res.status(400).json({ error: 'Comment is too long' });
     const rows = await sql`
       INSERT INTO indicator_comments (indicator_id, user_id, author_name, body)
       VALUES (${id}, ${auth?.id || null}, ${auth ? null : authorName}, ${body})
-      RETURNING id, body, author_name, created_at
+      RETURNING id, body, author_name, created_at, user_id
     `;
     await sql`
       UPDATE indicators
@@ -314,11 +315,16 @@ async function handleComments(req, res, id) {
       WHERE id = ${id}
     `;
     const c = rows[0];
+    let resolvedAuthorName = c.author_name || 'Guest';
+    if (auth) {
+      const userRows = await sql`SELECT id AS user_id, wallet_address AS user_wallet FROM users WHERE id = ${auth.id}`;
+      resolvedAuthorName = commentAuthorLabel(userRows[0] || { user_id: auth.id, user_wallet: auth.wallet });
+    }
     return res.status(201).json({
       comment: {
         id: c.id,
         body: c.body,
-        authorName: auth ? 'You' : (c.author_name || 'Anonymous'),
+        authorName: resolvedAuthorName,
         createdAt: c.created_at,
       },
     });
@@ -401,10 +407,14 @@ async function handlePage(req, res, id) {
   const priceInfo = bp100 ? `${bp100} SOL / 100 calls` : (minPrice ? `From ${minPrice} SOL` : 'Free');
   const isMarketMode = !!config.markets;
   const visibleMarketCount = config.marketCount || marketCountFromRow(indicator);
+  const previewMarketEntries = previewMarketsFromRow(indicator, 4);
+  const previewEntries = previewMarketEntries.length
+    ? previewMarketEntries.map((m, idx) => `<div class="flex items-center gap-3 py-2 border-b border-gray-800/50 last:border-0"><div class="flex-1 min-w-0"><div class="text-sm text-gray-300 truncate">${esc(m.id)}</div><div class="mt-1 text-[11px] text-gray-500">sample market ${idx + 1}</div></div><span class="text-[11px] text-gray-600 blur-[3px] select-none">weight ${idx % 2 ? '42' : '78'}%</span></div>`)
+    : [`<div class="text-sm text-gray-400">Market preview unavailable for this indicator.</div>`];
   const weightEntries = isProtected
     ? [
-        `<div class="text-sm text-gray-400 leading-relaxed">This paid indicator's recipe is protected. API access returns the signal, not the full market weights.</div>`,
-        `<div class="mt-2 text-sm flex justify-between"><span class="text-gray-400">Inputs</span><span class="text-gray-200">${visibleMarketCount} protected</span></div>`,
+        `<div class="space-y-1">${previewEntries.join('')}</div>`,
+        `<div class="mt-3 text-sm flex justify-between"><span class="text-gray-400">Hidden inputs</span><span class="text-gray-200">${Math.max(0, visibleMarketCount - previewMarketEntries.length)} markets</span></div>`,
       ]
     : (isMarketMode
       ? [`<div class="text-sm text-gray-400">${visibleMarketCount} markets selected</div>`]
@@ -442,4 +452,15 @@ function scoreLabel(n) {
   if (n < 60) return 'Neutral';
   if (n < 80) return 'Bullish';
   return 'Strongly Bullish';
+}
+
+function shortWallet(wallet) {
+  if (!wallet) return null;
+  const w = String(wallet);
+  if (w.length <= 12) return w;
+  return `${w.slice(0, 4)}..${w.slice(-4)}`;
+}
+
+function commentAuthorLabel(row = {}) {
+  return shortWallet(row.user_wallet) || (row.user_id ? 'Account' : (row.author_name || 'Guest'));
 }

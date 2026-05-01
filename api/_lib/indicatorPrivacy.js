@@ -48,6 +48,14 @@ function marketCountFromRow(row = {}) {
     .length;
 }
 
+function previewMarketsFromRow(row = {}, limit = 4) {
+  const { markets } = configFromRow(row);
+  if (!markets || typeof markets !== 'object' || Array.isArray(markets)) return [];
+  return Object.keys(markets)
+    .slice(0, Math.max(0, limit))
+    .map(id => ({ id }));
+}
+
 function publicIndicatorPayload(row, options = {}) {
   const includeConfig = options.includeConfig === true;
   const prices = bundlePricesFromRow(row);
@@ -65,6 +73,11 @@ function publicIndicatorPayload(row, options = {}) {
     bundlePrices: prices,
     minPrice: minBundlePrice(prices),
   };
+
+  if (paid) {
+    payload.previewMarkets = previewMarketsFromRow(row, options.previewLimit ?? 4);
+    payload.hiddenMarketCount = Math.max(0, payload.marketCount - payload.previewMarkets.length);
+  }
 
   if (includeConfig) {
     if (markets && typeof markets === 'object' && Object.keys(markets).length > 0) {
@@ -98,6 +111,7 @@ module.exports = {
   minBundlePrice,
   configFromRow,
   marketCountFromRow,
+  previewMarketsFromRow,
   publicIndicatorPayload,
   paidApiConfigSummary,
 };

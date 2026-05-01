@@ -6,6 +6,7 @@ const {
   hasPaidPricing,
   marketCountFromRow,
   paidApiConfigSummary,
+  previewMarketsFromRow,
   publicIndicatorPayload,
 } = privacy;
 
@@ -31,9 +32,32 @@ test('paid public indicator payload redacts recipe by default', () => {
   assert.equal(payload.forkable, false);
   assert.equal(payload.marketCount, 2);
   assert.equal(payload.minPrice, 0.5);
+  assert.deepEqual(payload.previewMarkets, [{ id: 'm1' }, { id: 'm2' }]);
+  assert.equal(payload.hiddenMarketCount, 0);
   assert.equal(Object.hasOwn(payload, 'markets'), false);
   assert.equal(Object.hasOwn(payload, 'weights'), false);
   assert.equal(Object.hasOwn(payload, 'referenceAsset'), false);
+});
+
+test('paid preview exposes only limited market ids without weight config', () => {
+  const row = {
+    weights: {
+      markets: {
+        a: { w: 90, flip: false },
+        b: { w: 20, flip: true },
+        c: { w: 40, flip: false },
+      },
+    },
+    price_bundle_50: '1',
+  };
+
+  const payload = publicIndicatorPayload(row, { previewLimit: 2 });
+
+  assert.deepEqual(previewMarketsFromRow(row, 2), [{ id: 'a' }, { id: 'b' }]);
+  assert.deepEqual(payload.previewMarkets, [{ id: 'a' }, { id: 'b' }]);
+  assert.equal(payload.hiddenMarketCount, 1);
+  assert.equal(JSON.stringify(payload).includes('"w"'), false);
+  assert.equal(JSON.stringify(payload).includes('"flip"'), false);
 });
 
 test('free public indicator payload can expose recipe for browser computation', () => {
