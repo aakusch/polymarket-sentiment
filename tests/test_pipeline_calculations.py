@@ -1,12 +1,13 @@
 import json
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
 from db import Database
-from export import build_export_meta, export_latest
-from indicator_scores import update_latest_scores
+from export import _write_json, build_export_meta, export_latest
+from indicator_scores import compute_latest_score, update_latest_scores
 from scoring_contract import SCORING_VERSION
 from scorer import MarketScore, _event_deduped_composite, sector_score_from_market_scores
 
@@ -133,6 +134,41 @@ class PipelineCalculationTests(unittest.TestCase):
         self.assertEqual(conn.cur.updates, [(66.6, "ok"), (None, "stale")])
         self.assertTrue(conn.committed)
 
+    def test_market_latest_score_uses_current_snapshot_date(self):
+        class FakeCursor:
+            def __init__(self, rows):
+                self.rows = rows
+                self.result = []
+
+            def execute(self, query, params=None):
+                if "SELECT MAX(date) FROM market_snapshots" in query:
+                    self.result = [("2026-05-01",)]
+                elif "SELECT market_id, sentiment_signal, weight" in query:
+                    snapshot_date = params[0]
+                    self.result = self.rows.get(snapshot_date, [])
+                else:
+                    self.result = []
+
+            def fetchone(self):
+                return self.result[0] if self.result else (None,)
+
+            def fetchall(self):
+                return self.result
+
+        class FakeConn:
+            def __init__(self, rows):
+                self.rows = rows
+
+            def cursor(self):
+                return FakeCursor(self.rows)
+
+        stale = {"2026-04-10": [("m1", 1.0, 1.0)]}
+        indicator = {"id": "stale", "markets": {"m1": {"w": 100}}, "fg_enabled": False}
+        self.assertIsNone(compute_latest_score(FakeConn(stale), indicator))
+
+        current = {"2026-05-01": [("m1", 1.0, 1.0)]}
+        self.assertEqual(compute_latest_score(FakeConn(current), indicator), 100.0)
+
     def test_pipeline_run_lifecycle_records_status(self):
         with tempfile.TemporaryDirectory() as td:
             db_path = Path(td) / "pipeline.sqlite"
@@ -172,6 +208,14 @@ class PipelineCalculationTests(unittest.TestCase):
         self.assertEqual(meta["sectors"]["crypto"]["latest_date"], "2026-04-27")
         self.assertEqual(meta["sectors"]["crypto"]["files"]["latest"], "data/latest.json")
         self.assertEqual(meta["pipeline_runs"][0]["id"], run_id)
+
+    def test_write_json_serializes_datetime_values(self):
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "meta.json"
+            _write_json(out, {"started_at": datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)})
+            data = json.loads(out.read_text())
+
+        self.assertEqual(data["started_at"], "2026-05-01T12:00:00+00:00")
 
 
 if __name__ == "__main__":

@@ -117,13 +117,17 @@
       color: #bfdbfe; background: rgba(37,99,235,.13); border-color: rgba(96,165,250,.36);
     }
     .ind-insight {
-      min-height: 86px;
+      min-height: 40px;
       background: linear-gradient(180deg, rgba(31,41,55,.28), rgba(17,24,39,.36));
       border: 1px solid rgba(75,85,99,.32);
-      border-radius: 10px;
-      padding: 14px;
+      border-radius: 9px;
+      padding: 9px 11px;
       position: relative;
       overflow: hidden;
+      display: grid;
+      grid-template-columns: auto auto minmax(0, 1fr);
+      align-items: center;
+      gap: 9px;
     }
     .ind-insight.live::after {
       content: ""; position: absolute; inset: 0;
@@ -225,21 +229,16 @@
   <div class="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
 
     <!-- INDICATORS PAGE -->
-    <div id="page-indicators" class="page space-y-6">
-      <div class="app-surface rounded-xl p-5 sm:p-6">
-        <div class="flex items-start justify-between gap-5 flex-wrap">
-          <div class="min-w-0">
-            <div class="text-[11px] text-blue-300/80 uppercase tracking-[0.18em] mb-2">Strategy Marketplace</div>
-            <h1 class="text-2xl sm:text-3xl font-semibold text-gray-100 tracking-tight">Indicators</h1>
-            <p class="mt-2 text-sm text-gray-500 max-w-2xl leading-relaxed">Discover public sentiment strategies, compare signal quality, and open protected previews before consuming them through the API.</p>
-          </div>
-          <a href="#builder" class="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-500 active:scale-[0.97] transition-all shadow-lg shadow-blue-600/20">
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-            New Indicator
-          </a>
+    <div id="page-indicators" class="page space-y-4">
+      <div class="flex items-center justify-between gap-3 flex-wrap">
+        <div class="min-w-0">
+          <h1 class="text-2xl font-semibold text-gray-100 tracking-tight">Indicators</h1>
+          <div id="indicator-insights" class="mt-1 flex items-center gap-3 text-xs text-gray-500 flex-wrap"></div>
         </div>
-        <div id="indicator-insights" class="grid grid-cols-2 lg:grid-cols-4 gap-3 mt-5"></div>
-        <div id="indicator-activity" class="mt-4"></div>
+        <a href="#builder" class="inline-flex items-center gap-1.5 px-3.5 py-2 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-500 active:scale-[0.97] transition-all shadow-lg shadow-blue-600/20">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+          New Indicator
+        </a>
       </div>
 
       <div class="app-surface rounded-xl p-3 sm:p-4">
@@ -633,7 +632,7 @@
   <script src="js/sectors.js"></script>
   <script src="js/auth.js"></script>
   <script src="js/app.js"></script>
-  <script src="js/sandbox.js"></script>
+  <script src="js/sandbox.js?v=20260501-indicators-compact"></script>
   <script src="js/api-panel.js"></script>
   <script src="js/docs.js"></script>
 

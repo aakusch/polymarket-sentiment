@@ -31,10 +31,11 @@ function minBundlePrice(rowOrPrices = {}) {
 function configFromRow(row = {}) {
   const weights = row.weights || {};
   const markets = weights.markets || row.markets || null;
+  const hasReferenceAsset = Object.prototype.hasOwnProperty.call(weights, 'referenceAsset');
   return {
     weights,
     markets,
-    referenceAsset: weights.referenceAsset ?? null,
+    referenceAsset: hasReferenceAsset ? weights.referenceAsset : undefined,
   };
 }
 
@@ -85,7 +86,7 @@ function publicIndicatorPayload(row, options = {}) {
     } else {
       payload.weights = weights;
     }
-    payload.referenceAsset = referenceAsset;
+    if (referenceAsset !== undefined) payload.referenceAsset = referenceAsset;
   }
 
   return payload;

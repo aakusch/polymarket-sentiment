@@ -28,17 +28,17 @@ const DEFAULT_PUBLIC_INDICATORS = [
   { id: 'demo-crypto-regulatory', name: 'Crypto Regulatory Pulse', sector: 'crypto', asset: 'BTC', referenceAsset: 'btc_price', weights: { price_targets: 30, regulatory: 200, adoption: 40, events: 40 }, fgEnabled: false, fgWeight: 30 },
   { id: 'demo-crypto-fg', name: 'BTC Fear & Greed Blend', sector: 'crypto', asset: 'BTC', referenceAsset: 'btc_price', weights: { price_targets: 100, regulatory: 60, adoption: 60, events: 60 }, fgEnabled: true, fgWeight: 50 },
   { id: 'demo-spx-sentiment', name: 'S&P 500 Sentiment', sector: 'stocks', asset: 'SPX', referenceAsset: 'spx_price', weights: { price_targets: 100, earnings: 80, corporate: 60 }, fgEnabled: false, fgWeight: 30 },
-  { id: 'demo-tech-pulse', name: 'Tech Mega-Cap Pulse', sector: 'stocks', asset: 'NDX', referenceAsset: 'ndx_price', weights: { price_targets: 150, earnings: 150, corporate: 40 }, fgEnabled: false, fgWeight: 30 },
-  { id: 'demo-earnings-signal', name: 'Earnings Season Signal', sector: 'stocks', asset: 'SPX', referenceAsset: 'spx_price', weights: { price_targets: 40, earnings: 200, corporate: 80 }, fgEnabled: false, fgWeight: 30 },
-  { id: 'demo-fed-outlook', name: 'Fed Policy Outlook', sector: 'economy', asset: 'RATES', referenceAsset: 'fed_rate', weights: { monetary_policy: 200, inflation: 80, growth: 40, employment: 40 }, fgEnabled: false, fgWeight: 30 },
-  { id: 'demo-recession-watch', name: 'Recession Watch', sector: 'economy', asset: 'GDP', referenceAsset: 'us10y_yield', weights: { monetary_policy: 60, inflation: 60, growth: 200, employment: 150 }, fgEnabled: false, fgWeight: 30 },
-  { id: 'demo-macro-index', name: 'Macro Sentiment Index', sector: 'economy', asset: 'MACRO', referenceAsset: 'us10y_yield', weights: { monetary_policy: 100, inflation: 100, growth: 100, employment: 100 }, fgEnabled: false, fgWeight: 30 },
-  { id: 'demo-election-barometer', name: 'Election Barometer', sector: 'politics', asset: 'GOV', referenceAsset: null, weights: { favors_incumbent: 150, favors_challenger: 150, legislative: 30, judicial: 20, geopolitical: 20 }, fgEnabled: false, fgWeight: 30 },
-  { id: 'demo-policy-impact', name: 'Policy Impact Index', sector: 'politics', asset: 'GOV', referenceAsset: null, weights: { favors_incumbent: 30, favors_challenger: 30, legislative: 150, judicial: 100, geopolitical: 100 }, fgEnabled: false, fgWeight: 30 },
-  { id: 'demo-political-sentiment', name: 'Political Sentiment', sector: 'politics', asset: 'GOV', referenceAsset: null, weights: { favors_incumbent: 100, favors_challenger: 100, legislative: 80, judicial: 60, geopolitical: 60 }, fgEnabled: false, fgWeight: 30 },
+  { id: 'demo-tech-pulse', name: 'Tech Mega-Cap Pulse', sector: 'stocks', asset: 'NDX', referenceAsset: 'ndx_price', weights: { price_targets: 150 }, fgEnabled: false, fgWeight: 30 },
+  { id: 'demo-earnings-signal', name: 'Earnings Season Signal', sector: 'stocks', asset: 'SPX', referenceAsset: 'spx_price', weights: { price_targets: 120 }, fgEnabled: false, fgWeight: 30 },
+  { id: 'demo-fed-outlook', name: 'Fed Policy Outlook', sector: 'economy', asset: 'MACRO', referenceAsset: 'fed_rate', weights: { monetary_policy: 200, growth: 80 }, fgEnabled: false, fgWeight: 30 },
+  { id: 'demo-recession-watch', name: 'Recession Watch', sector: 'economy', asset: 'GDP', referenceAsset: 'us10y_yield', weights: { growth: 200 }, fgEnabled: false, fgWeight: 30 },
+  { id: 'demo-macro-index', name: 'Macro Sentiment Index', sector: 'economy', asset: 'MACRO', referenceAsset: 'us10y_yield', weights: { monetary_policy: 100, growth: 100 }, fgEnabled: false, fgWeight: 30 },
+  { id: 'demo-election-barometer', name: 'Election Barometer', sector: 'politics', asset: 'GOV', referenceAsset: null, weights: { other: 100 }, includeOther: true, fgEnabled: false, fgWeight: 30 },
+  { id: 'demo-policy-impact', name: 'Policy Impact Index', sector: 'politics', asset: 'GOV', referenceAsset: null, weights: { other: 100 }, includeOther: true, fgEnabled: false, fgWeight: 30 },
+  { id: 'demo-political-sentiment', name: 'Political Sentiment', sector: 'politics', asset: 'GOV', referenceAsset: null, weights: { other: 100 }, includeOther: true, fgEnabled: false, fgWeight: 30 },
 ].map(ind => ({
   ...ind,
-  includeOther: false,
+  includeOther: ind.includeOther || false,
   isPublic: true,
   creator: 'PMSI Team',
   createdAt: '2026-04-08T20:21:53Z',
@@ -196,6 +196,108 @@ function indicatorProtectionBadge(ind = {}) {
   return isPaidIndicator(ind)
     ? '<span class="text-[10px] text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded px-1.5 py-0.5">Protected</span>'
     : '';
+}
+
+function titleCaseAsset(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return 'Mixed assets';
+  if (raw.length <= 5 && raw === raw.toUpperCase()) return raw;
+  return raw
+    .replace(/[_-]/g, ' ')
+    .replace(/\b\w/g, ch => ch.toUpperCase());
+}
+
+function referenceAssetLabel(key) {
+  if (!key) return 'No benchmark';
+  const meta = typeof ALL_REFERENCE_ASSETS !== 'undefined'
+    ? ALL_REFERENCE_ASSETS.find(a => a.key === key || a.id === key)
+    : null;
+  return meta?.label || titleCaseAsset(key);
+}
+
+function referenceAssetFormat(key) {
+  const meta = typeof ALL_REFERENCE_ASSETS !== 'undefined'
+    ? ALL_REFERENCE_ASSETS.find(a => a.key === key || a.id === key)
+    : null;
+  return meta?.format || '$';
+}
+
+const UNDERLYING_ASSET_REFERENCE_KEYS = {
+  BTC: 'btc_price',
+  ETH: 'eth_price',
+  SOL: 'sol_price',
+  SPX: 'spx_price',
+  NDX: 'ndx_price',
+  DJI: 'dji_price',
+  RUT: 'rut_price',
+  MARKET: 'spx_price',
+  VIX: 'vix_price',
+  YIELD: 'us10y_yield',
+  RATES: 'fed_rate',
+  JOBS: 'unemployment',
+  DXY: 'dxy_price',
+  GOLD: 'gold_price',
+  OIL: 'oil_price',
+};
+
+function underlyingAssetReferenceKey(asset) {
+  return UNDERLYING_ASSET_REFERENCE_KEYS[String(asset || '').toUpperCase()] || null;
+}
+
+function indicatorAssetMix(ind = {}) {
+  const counts = {};
+  const protectedCount = getIndicatorMarketCount(ind);
+  if (isRecipeProtected(ind)) {
+    if (ind.asset) counts[ind.asset] = protectedCount || 1;
+    return counts;
+  }
+  const markets = ind.markets || ind.weights?.markets;
+  if (markets && typeof markets === 'object') {
+    const marketIndex = getMarketHistoryIndex();
+    for (const [mid, raw] of Object.entries(markets)) {
+      const cfgAsset = raw && typeof raw === 'object' ? raw.asset : null;
+      const asset = cfgAsset || marketIndex[mid]?.asset || ind.asset || 'Mixed';
+      counts[asset] = (counts[asset] || 0) + 1;
+    }
+  } else if (ind.asset) {
+    counts[ind.asset] = 1;
+  }
+  return counts;
+}
+
+function indicatorTrackingMeta(ind = {}) {
+  const sectorId = ind.sector || 'crypto';
+  const sectorLabel = SECTORS[sectorId]?.label || titleCaseAsset(sectorId);
+  const refKey = resolveIndicatorReferenceAsset(ind, sectorId);
+  const referenceLabel = referenceAssetLabel(refKey);
+  const assetEntries = Object.entries(indicatorAssetMix(ind)).sort((a, b) => b[1] - a[1]);
+  const total = assetEntries.reduce((sum, [, n]) => sum + n, 0);
+  const primaryAsset = assetEntries[0]?.[0] || ind.asset || 'Mixed';
+  const primaryCount = assetEntries[0]?.[1] || 0;
+  const extraAssets = Math.max(0, assetEntries.length - 1);
+  const assetLabel = extraAssets > 0
+    ? `${titleCaseAsset(primaryAsset)} +${extraAssets}`
+    : titleCaseAsset(primaryAsset);
+  const assetDetail = extraAssets > 0
+    ? `${primaryCount}/${total} ${titleCaseAsset(primaryAsset)} markets`
+    : `${sectorLabel} focus`;
+  const marketCount = getIndicatorMarketCount(ind);
+  const modeLabel = ind.markets || ind.weights?.markets || ind.previewMarkets
+    ? 'Market basket'
+    : 'Category model';
+  const benchmarkText = refKey ? `vs ${referenceLabel}` : 'no price benchmark';
+  return {
+    sectorId,
+    sectorLabel,
+    primaryAsset,
+    assetLabel,
+    assetDetail,
+    referenceLabel,
+    benchmarkText,
+    modeLabel,
+    marketCount,
+    sentence: `Tracks ${assetLabel} ${sectorLabel.toLowerCase()} sentiment, ${benchmarkText}.`,
+  };
 }
 
 function protectedForkMessage() {
@@ -755,11 +857,12 @@ function renderInsight(label, value, detail, tone = 'blue', live = false) {
     gray: 'text-gray-300',
   };
   return `
-    <div class="ind-insight ${live ? 'live' : ''}">
-      <div class="text-[10px] text-gray-600 uppercase tracking-[0.16em] flex items-center gap-2">${live ? '<span class="alive-dot"></span>' : ''}${label}</div>
-      <div class="mt-2 text-2xl font-semibold ${colors[tone] || colors.blue} tabular-nums">${value}</div>
-      <div class="mt-1 text-xs text-gray-500 truncate">${detail}</div>
-    </div>`;
+    <span class="inline-flex items-center gap-1.5 whitespace-nowrap ${live ? 'live-inline' : ''}">
+      ${live ? '<span class="alive-dot"></span>' : ''}
+      <span class="text-gray-600">${label}</span>
+      <span class="${colors[tone] || colors.blue} font-medium tabular-nums">${value}</span>
+      <span class="hidden sm:inline text-gray-600">${detail}</span>
+    </span>`;
 }
 
 function renderIndicatorInsights(rankedAll, ranked) {
@@ -868,7 +971,7 @@ function startIndicatorLiveUpdates(rankedAll = []) {
       } else {
         const ranked = (_indicatorCache || []).map(ind => ({ ind }));
         renderIndicatorActivity(ranked);
-        const liveDetail = document.querySelector('#indicator-insights .ind-insight.live .text-xs');
+        const liveDetail = document.querySelector('#indicator-insights .live-inline .hidden');
         if (liveDetail) liveDetail.textContent = `checked ${formatLiveTime(indicatorLastCheckedAt)}`;
       }
     } catch (_) {}
@@ -1598,32 +1701,59 @@ async function renderIndicatorDetail() {
   const refKey = resolveIndicatorReferenceAsset(ind, sector);
   const refMeta = typeof ALL_REFERENCE_ASSETS !== 'undefined' ? ALL_REFERENCE_ASSETS.find(a => a.key === refKey) : null;
   const refLabel = refKey ? (refMeta?.label || refKey) : 'No reference asset';
+  const tracking = indicatorTrackingMeta(ind);
+  const underlyingRefKey = underlyingAssetReferenceKey(tracking.primaryAsset);
+  const underlyingRefLabel = underlyingRefKey ? referenceAssetLabel(underlyingRefKey) : null;
+  const underlyingRefFmt = referenceAssetFormat(underlyingRefKey);
+  const refMapForChart = sectorData?.refMap || sectorDataCache[sector]?.refMap || {};
+  const underlyingPrices = underlyingRefKey
+    ? ts.dates.map(d => refMapForChart[d]?.[underlyingRefKey] ?? null)
+    : [];
+  const hasUnderlyingPriceLine = underlyingPrices.some(v => v != null);
+  const chartTitle = hasUnderlyingPriceLine
+    ? `${tracking.assetLabel} sentiment + ${underlyingRefLabel}`
+    : `${tracking.assetLabel} sentiment vs ${refLabel}`;
+  const chartSubtitle = hasUnderlyingPriceLine
+    ? `${tracking.assetDetail} · ${tracking.modeLabel} · underlying shown on chart`
+    : `${tracking.assetDetail} · ${tracking.modeLabel}`;
 
   // Build markets list
   let marketsHtml = '';
   if (!recipeProtected && ind.markets && marketCount > 0) {
+    const marketIndex = getMarketHistoryIndex();
     const entries = [];
     for (const [mid, rawW] of Object.entries(ind.markets)) {
       const w = typeof rawW === 'object' ? (rawW.w ?? 100) : (typeof rawW === 'number' ? rawW : 100);
       const flip = typeof rawW === 'object' ? !!rawW.flip : false;
-      let name = mid, prob = null;
-      for (const sId of SECTOR_ORDER) {
-        const sd = sectorDataCache[sId];
-        if (!sd?.sandbox?.assets) continue;
-        for (const [, ad] of Object.entries(sd.sandbox.assets)) {
-          if (ad.markets?.[mid]) { name = ad.markets[mid].q || mid; prob = ad.markets[mid].prob; break; }
-        }
-        if (name !== mid) break;
-      }
-      entries.push({ mid, name, w, flip, prob });
+      const meta = marketIndex[mid] || getMarketMeta(mid);
+      const cfgSector = typeof rawW === 'object' ? rawW.sector : null;
+      const cfgAsset = typeof rawW === 'object' ? rawW.asset : null;
+      entries.push({
+        mid,
+        name: meta?.q || mid,
+        w,
+        flip,
+        prob: meta?.prob ?? null,
+        cat: meta?.cat || null,
+        sector: cfgSector || meta?.sector || sector,
+        asset: cfgAsset || meta?.asset || ind.asset,
+      });
     }
     entries.sort((a, b) => b.w - a.w);
     marketsHtml = entries.map(m => {
       const probStr = m.prob != null ? `${(m.prob * 100).toFixed(0)}%` : '';
+      const mSector = SECTORS[m.sector]?.label || titleCaseAsset(m.sector);
       return `<div class="flex items-center gap-3 py-2 px-3 rounded-lg hover:bg-gray-800/40 transition-colors text-sm">
         <div class="w-8 text-right text-[11px] tabular-nums text-gray-500 shrink-0">${m.w}%</div>
         ${m.flip ? '<span class="text-[10px] text-red-400/70 w-6 shrink-0">INV</span>' : '<span class="w-6 shrink-0"></span>'}
-        <div class="flex-1 min-w-0 text-gray-300 truncate">${escapeHtml(m.name)}</div>
+        <div class="flex-1 min-w-0">
+          <div class="text-gray-300 truncate">${escapeHtml(m.name)}</div>
+          <div class="mt-0.5 flex items-center gap-2 flex-wrap">
+            <span class="text-[10px] text-gray-500">${escapeHtml(mSector)}</span>
+            <span class="text-[10px] text-gray-500">${escapeHtml(titleCaseAsset(m.asset))}</span>
+            ${m.cat ? `<span class="text-[10px] text-gray-600">${escapeHtml(m.cat.replace(/_/g, ' '))}</span>` : ''}
+          </div>
+        </div>
         ${probStr ? `<span class="text-[11px] tabular-nums text-gray-500 shrink-0">${probStr}</span>` : ''}
       </div>`;
     }).join('');
@@ -1658,9 +1788,12 @@ async function renderIndicatorDetail() {
       </a>
       <div class="flex-1 min-w-0">
         <h1 class="text-xl font-semibold text-gray-100 truncate">${escapeHtml(ind.name)}</h1>
-        <div class="flex items-center gap-2 mt-0.5 flex-wrap">
+        <p class="text-sm text-gray-400 mt-1">${escapeHtml(tracking.sentence)}</p>
+        <div class="flex items-center gap-2 mt-2 flex-wrap">
           ${!ind._isOwned && (ind.creator || ind.creatorName) ? `<span class="text-[10px] text-gray-500">by ${escapeHtml(ind.creator || ind.creatorName)}</span>` : ''}
           ${ind.sector ? `<span class="sector-chip">${escapeHtml(SECTORS[ind.sector]?.label || ind.sector)}</span>` : ''}
+          <span class="text-[10px] text-gray-500">underlying ${escapeHtml(tracking.assetLabel)}</span>
+          <span class="text-[10px] text-gray-500">${escapeHtml(tracking.modeLabel)}</span>
           ${indicatorProtectionBadge(ind)}
           ${marketCount > 0 ? `<span class="text-[10px] text-gray-600">${marketCount} markets</span>` : ''}
           ${ind.fgEnabled ? '<span class="text-[10px] text-green-500/80">F&G blended</span>' : ''}
@@ -1711,6 +1844,17 @@ async function renderIndicatorDetail() {
     </div>
 
     <div class="app-surface rounded-xl p-5 mb-6">
+      <div class="flex items-center justify-between gap-3 mb-4">
+        <div>
+          <h2 class="text-sm font-medium text-gray-200">${escapeHtml(chartTitle)}</h2>
+          <p class="text-xs text-gray-500 mt-0.5">${escapeHtml(chartSubtitle)}</p>
+        </div>
+        <div class="hidden sm:flex items-center gap-2 text-[11px]">
+          <span class="stat-pill">Underlying ${escapeHtml(tracking.assetLabel)}</span>
+          <span class="stat-pill">${escapeHtml(tracking.benchmarkText)}</span>
+          <span class="text-gray-600">${ts.dates.length ? `${ts.dates.length} obs` : 'No chart data'}</span>
+        </div>
+      </div>
       <div style="height:320px"><canvas id="detail-chart"></canvas></div>
     </div>
 
@@ -1756,9 +1900,17 @@ async function renderIndicatorDetail() {
     const canvas = document.getElementById('detail-chart');
     if (!canvas) return;
     const refFmt = refMeta?.format || '$';
-    const tickCb = refFmt === '%'
-      ? (v => v.toFixed(1) + '%')
-      : (v => v >= 1000 ? '$' + (v/1000).toFixed(0) + 'K' : '$' + v.toFixed(0));
+    const formatChartValue = (value, fmt) => {
+      if (fmt === '%') return value.toFixed(2) + '%';
+      if (fmt === '0-100' || fmt === '#') return value.toLocaleString(undefined, { maximumFractionDigits: 1 });
+      return '$' + value.toLocaleString();
+    };
+    const tickCb = (v) => {
+      const fmt = hasUnderlyingPriceLine ? underlyingRefFmt : refFmt;
+      if (fmt === '%') return v.toFixed(1) + '%';
+      if (fmt === '0-100' || fmt === '#') return v.toLocaleString(undefined, { maximumFractionDigits: 0 });
+      return v >= 1000 ? '$' + (v/1000).toFixed(0) + 'K' : '$' + v.toFixed(0);
+    };
 
     detailChartInstance = new Chart(canvas.getContext('2d'), {
       type: 'line',
@@ -1766,7 +1918,7 @@ async function renderIndicatorDetail() {
         labels: ts.dates.map(d => new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })),
         datasets: [
           {
-            label: 'Indicator Score',
+            label: `${tracking.assetLabel} sentiment`,
             data: ts.scores,
             borderColor: '#60a5fa',
             backgroundColor: 'rgba(96,165,250,0.08)',
@@ -1777,7 +1929,19 @@ async function renderIndicatorDetail() {
             pointHitRadius: 8,
             yAxisID: 'y',
           },
-          ...(ts.prices.some(p => p != null) ? [{
+          ...(hasUnderlyingPriceLine ? [{
+            label: underlyingRefLabel,
+            data: underlyingPrices,
+            borderColor: '#c4b5fd',
+            borderWidth: 1.6,
+            fill: false,
+            tension: 0.3,
+            pointRadius: 0,
+            pointHitRadius: 8,
+            yAxisID: 'y2',
+            fmt: underlyingRefFmt,
+          }] : []),
+          ...(ts.prices.some(p => p != null) && refKey !== underlyingRefKey ? [{
             label: refLabel,
             data: ts.prices,
             borderColor: '#9ca3af',
@@ -1788,6 +1952,7 @@ async function renderIndicatorDetail() {
             pointRadius: 0,
             pointHitRadius: 8,
             yAxisID: 'y2',
+            fmt: refFmt,
           }] : []),
         ],
       },
@@ -1811,8 +1976,7 @@ async function renderIndicatorDetail() {
                 const val = ctx.parsed.y;
                 if (val == null) return null;
                 if (ctx.dataset.yAxisID === 'y2') {
-                  if (refFmt === '%') return ctx.dataset.label + ': ' + val.toFixed(2) + '%';
-                  return ctx.dataset.label + ': $' + val.toLocaleString();
+                  return ctx.dataset.label + ': ' + formatChartValue(val, ctx.dataset.fmt || refFmt);
                 }
                 return ctx.dataset.label + ': ' + val.toFixed(1) + '/100';
               },

@@ -37,6 +37,54 @@ const DEMO_USER = {
   wallet_address: null,
 };
 
+const SANDBOX_FILE_BY_SECTOR = {
+  crypto: 'sandbox.json',
+  stocks: 'sandbox-stocks.json',
+  economy: 'sandbox-economy.json',
+  politics: 'sandbox-politics.json',
+};
+
+const sandboxCache = new Map();
+
+function loadSandbox(sector) {
+  if (sandboxCache.has(sector)) return sandboxCache.get(sector);
+  const file = SANDBOX_FILE_BY_SECTOR[sector];
+  if (!file) throw new Error(`Unsupported sector for demo seed: ${sector}`);
+  const full = path.join(__dirname, '..', 'public', 'data', file);
+  const data = JSON.parse(fs.readFileSync(full, 'utf8'));
+  sandboxCache.set(sector, data);
+  return data;
+}
+
+function latestMarketWeight(market, latestIdx) {
+  const ss = market?.ss?.[latestIdx];
+  const wt = market?.wt?.[latestIdx];
+  if (ss == null || wt == null || !Number.isFinite(Number(wt)) || Number(wt) <= 0) return 0;
+  return Number(wt);
+}
+
+function marketSelection(sector, asset, categories = [], limit = 8) {
+  const data = loadSandbox(sector);
+  const assetData = data.assets?.[asset];
+  if (!assetData?.markets) {
+    throw new Error(`Cannot seed ${sector}/${asset}: asset is missing from public sandbox data`);
+  }
+
+  const wanted = new Set(categories);
+  const latestIdx = Math.max(0, (assetData.dates || []).length - 1);
+  const rows = Object.entries(assetData.markets)
+    .map(([id, market]) => ({ id, market, latestWeight: latestMarketWeight(market, latestIdx) }))
+    .filter(({ market, latestWeight }) => latestWeight > 0 && (!wanted.size || wanted.has(market.cat)))
+    .sort((a, b) => (b.latestWeight - a.latestWeight) || ((b.market.vol || 0) - (a.market.vol || 0)))
+    .slice(0, limit);
+
+  if (!rows.length) {
+    throw new Error(`Cannot seed ${sector}/${asset}: no current markets match ${categories.join(',') || 'any category'}`);
+  }
+
+  return Object.fromEntries(rows.map(({ id }) => [id, { w: 100, flip: false, sector, asset }]));
+}
+
 const DEMO_INDICATORS = [
   // ── Crypto ──────────────────────────────────────────────────
   {
@@ -91,7 +139,8 @@ const DEMO_INDICATORS = [
     name: 'Tech Mega-Cap Pulse',
     sector: 'stocks',
     asset: 'NDX',
-    weights: { price_targets: 150, earnings: 150, corporate: 40 },
+    markets: marketSelection('stocks', 'NDX', ['price_targets'], 8),
+    weights: { price_targets: 150 },
     fg_enabled: false,
     fg_weight: 30,
   },
@@ -100,7 +149,8 @@ const DEMO_INDICATORS = [
     name: 'Earnings Season Signal',
     sector: 'stocks',
     asset: 'SPX',
-    weights: { price_targets: 40, earnings: 200, corporate: 80 },
+    markets: marketSelection('stocks', 'SPX', ['price_targets'], 8),
+    weights: { price_targets: 120 },
     fg_enabled: false,
     fg_weight: 30,
   },
@@ -110,8 +160,10 @@ const DEMO_INDICATORS = [
     id: 'demo-fed-outlook',
     name: 'Fed Policy Outlook',
     sector: 'economy',
-    asset: 'FED',
-    weights: { monetary_policy: 200, inflation: 80, growth: 40, employment: 40 },
+    asset: 'MACRO',
+    reference_asset: 'fed_rate',
+    markets: marketSelection('economy', 'MACRO', ['monetary_policy', 'growth', 'regulatory'], 8),
+    weights: { monetary_policy: 200, growth: 80 },
     fg_enabled: false,
     fg_weight: 30,
   },
@@ -120,7 +172,8 @@ const DEMO_INDICATORS = [
     name: 'Recession Watch',
     sector: 'economy',
     asset: 'GDP',
-    weights: { monetary_policy: 60, inflation: 60, growth: 200, employment: 150 },
+    markets: marketSelection('economy', 'GDP', ['growth', 'price_targets'], 8),
+    weights: { growth: 200 },
     fg_enabled: false,
     fg_weight: 30,
   },
@@ -128,8 +181,9 @@ const DEMO_INDICATORS = [
     id: 'demo-macro-index',
     name: 'Macro Sentiment Index',
     sector: 'economy',
-    asset: 'FED',
-    weights: { monetary_policy: 100, inflation: 100, growth: 100, employment: 100 },
+    asset: 'MACRO',
+    markets: marketSelection('economy', 'MACRO', [], 10),
+    weights: { monetary_policy: 100, growth: 100 },
     fg_enabled: false,
     fg_weight: 30,
   },
@@ -139,8 +193,10 @@ const DEMO_INDICATORS = [
     id: 'demo-election-barometer',
     name: 'Election Barometer',
     sector: 'politics',
-    asset: 'GOP',
-    weights: { favors_incumbent: 150, favors_challenger: 150, legislative: 30, judicial: 20, geopolitical: 20 },
+    asset: 'GOV',
+    reference_asset: null,
+    markets: marketSelection('politics', 'GOV', ['price_targets'], 8),
+    weights: { favors_incumbent: 150, favors_challenger: 150 },
     fg_enabled: false,
     fg_weight: 30,
   },
@@ -148,8 +204,10 @@ const DEMO_INDICATORS = [
     id: 'demo-policy-impact',
     name: 'Policy Impact Index',
     sector: 'politics',
-    asset: 'SENATE',
-    weights: { favors_incumbent: 30, favors_challenger: 30, legislative: 150, judicial: 100, geopolitical: 100 },
+    asset: 'GOV',
+    reference_asset: null,
+    markets: marketSelection('politics', 'GOV', ['regulatory', 'other'], 8),
+    weights: { legislative: 150, judicial: 100, geopolitical: 100 },
     fg_enabled: false,
     fg_weight: 30,
   },
@@ -157,8 +215,10 @@ const DEMO_INDICATORS = [
     id: 'demo-political-sentiment',
     name: 'Political Sentiment',
     sector: 'politics',
-    asset: 'DEM',
-    weights: { favors_incumbent: 100, favors_challenger: 100, legislative: 80, judicial: 60, geopolitical: 60 },
+    asset: 'GOV',
+    reference_asset: null,
+    markets: marketSelection('politics', 'GOV', [], 10),
+    weights: { favors_incumbent: 100, favors_challenger: 100, legislative: 80 },
     fg_enabled: false,
     fg_weight: 30,
   },
@@ -254,16 +314,21 @@ async function seed() {
 
   // Upsert indicators
   for (const ind of DEMO_INDICATORS) {
+    const markets = ind.markets || null;
+    const hasReferenceAsset = Object.prototype.hasOwnProperty.call(ind, 'reference_asset');
+    const weights = markets
+      ? { markets, ...(hasReferenceAsset ? { referenceAsset: ind.reference_asset } : {}) }
+      : { ...ind.weights, ...(hasReferenceAsset ? { referenceAsset: ind.reference_asset } : {}) };
     await sql`
-      INSERT INTO indicators (id, user_id, name, sector, asset, weights, fg_enabled, fg_weight, include_other, is_public)
+      INSERT INTO indicators (id, user_id, name, sector, asset, weights, markets, fg_enabled, fg_weight, include_other, is_public)
       VALUES (
         ${ind.id}, ${DEMO_USER.id}, ${ind.name}, ${ind.sector}, ${ind.asset},
-        ${JSON.stringify(ind.weights)}, ${ind.fg_enabled}, ${ind.fg_weight},
+        ${JSON.stringify(weights)}, ${markets ? JSON.stringify(markets) : null}, ${ind.fg_enabled}, ${ind.fg_weight},
         false, true
       )
       ON CONFLICT (id) DO UPDATE SET
         name = EXCLUDED.name, sector = EXCLUDED.sector, asset = EXCLUDED.asset,
-        weights = EXCLUDED.weights, fg_enabled = EXCLUDED.fg_enabled, fg_weight = EXCLUDED.fg_weight,
+        weights = EXCLUDED.weights, markets = EXCLUDED.markets, fg_enabled = EXCLUDED.fg_enabled, fg_weight = EXCLUDED.fg_weight,
         is_public = true, updated_at = now()
     `;
     console.log(`  ${ind.sector.padEnd(8)} | ${ind.name}`);

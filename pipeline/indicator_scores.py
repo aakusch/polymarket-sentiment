@@ -146,15 +146,15 @@ def _compute_market_latest_score(conn, indicator: dict, markets: dict) -> float 
 
     cur = conn.cursor()
     placeholders = ",".join(["%s"] * len(market_ids))
-    sector = indicator.get("sector") or "crypto"
-    asset = indicator.get("asset") or "BTC"
     cross_sector = _has_explicit_sector(markets)
 
+    # Use the pipeline's current snapshot date, not the selected markets' most
+    # recent historical date. Otherwise expired/stale market selections can keep
+    # a leaderboard score forever.
     if cross_sector:
-        cur.execute(
-            f"SELECT MAX(date) FROM market_snapshots WHERE market_id IN ({placeholders})",
-            market_ids,
-        )
+        sectors = sorted({str(v.get("sector")) for v in markets.values() if isinstance(v, Mapping) and v.get("sector")})
+        sector_placeholders = ",".join(["%s"] * len(sectors))
+        cur.execute(f"SELECT MAX(date) FROM market_snapshots WHERE sector IN ({sector_placeholders})", sectors)
         latest_date = cur.fetchone()[0]
         if not latest_date:
             return None
@@ -167,14 +167,7 @@ def _compute_market_latest_score(conn, indicator: dict, markets: dict) -> float 
             [latest_date] + market_ids,
         )
     else:
-        cur.execute(
-            f"""
-            SELECT MAX(date)
-            FROM market_snapshots
-            WHERE sector = %s AND asset = %s AND market_id IN ({placeholders})
-            """,
-            [sector, asset] + market_ids,
-        )
+        cur.execute("SELECT MAX(date) FROM market_snapshots")
         latest_date = cur.fetchone()[0]
         if not latest_date:
             return None
@@ -182,9 +175,9 @@ def _compute_market_latest_score(conn, indicator: dict, markets: dict) -> float 
             f"""
             SELECT market_id, sentiment_signal, weight
             FROM market_snapshots
-            WHERE date = %s AND sector = %s AND asset = %s AND market_id IN ({placeholders})
+            WHERE date = %s AND market_id IN ({placeholders})
             """,
-            [latest_date, sector, asset] + market_ids,
+            [latest_date] + market_ids,
         )
 
     market_rows = {r[0]: (float(r[1]), float(r[2])) for r in cur.fetchall() if r[1] is not None and r[2] is not None}

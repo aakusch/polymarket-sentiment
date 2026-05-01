@@ -12,6 +12,42 @@ const {
   publicIndicatorPayload,
 } = require('../_lib/indicatorPrivacy');
 
+const SECTOR_LABELS = {
+  crypto: 'Crypto',
+  stocks: 'Equities',
+  economy: 'Macro',
+  politics: 'Politics',
+};
+
+const REFERENCE_LABELS = {
+  btc_price: 'BTC',
+  eth_price: 'ETH',
+  sol_price: 'SOL',
+  spx_price: 'S&P 500',
+  ndx_price: 'Nasdaq 100',
+  dji_price: 'Dow Jones',
+  rut_price: 'Russell 2000',
+  vix_price: 'VIX',
+  us10y_yield: '10Y Treasury',
+  us2y_yield: '2Y Treasury',
+  dxy_price: 'US Dollar (DXY)',
+  fed_rate: 'Fed Rate',
+  unemployment: 'Unemployment',
+  gold_price: 'Gold',
+  oil_price: 'Oil (WTI)',
+};
+
+function titleCaseAsset(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return 'Mixed assets';
+  if (raw.length <= 5 && raw === raw.toUpperCase()) return raw;
+  return raw.replace(/[_-]/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase());
+}
+
+function referenceLabel(key) {
+  return key ? (REFERENCE_LABELS[key] || titleCaseAsset(key)) : 'No benchmark';
+}
+
 module.exports = withDatabaseConfigError(async function handler(req, res) {
   const raw = req.query.params ?? req.query['[...params]'];
   const params = Array.isArray(raw) ? raw : raw ? [raw] : [];
@@ -405,11 +441,15 @@ async function handlePage(req, res, id) {
   const safeName = esc(indicator.name);
   const safeCreator = esc(indicator.creator_name || 'Anonymous');
   const safeAsset = esc(config.asset);
+  const safeAssetLabel = esc(titleCaseAsset(config.asset));
+  const safeSector = esc(SECTOR_LABELS[indicator.sector || 'crypto'] || titleCaseAsset(indicator.sector || 'crypto'));
+  const safeReference = esc(referenceLabel(config.referenceAsset));
   const bundlePrices = bundlePricesFromRow(indicator);
   const bp100 = bundlePrices[100];
   const minPrice = minBundlePrice(bundlePrices);
   const priceInfo = bp100 ? `${bp100} SOL / 100 calls` : (minPrice ? `From ${minPrice} SOL` : 'Free');
   const isMarketMode = !!config.markets;
+  const constructionLabel = isMarketMode || isProtected ? 'Market basket' : 'Category model';
   const visibleMarketCount = config.marketCount || marketCountFromRow(indicator);
   const previewMarketEntries = previewMarketsFromRow(indicator, 4);
   const previewEntries = previewMarketEntries.length
@@ -438,10 +478,10 @@ async function handlePage(req, res, id) {
 <script src="https://cdn.tailwindcss.com"></script><script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script></head>
 <body class="bg-gray-950 text-gray-200 min-h-screen">
 <nav class="sticky top-0 z-50 bg-gray-950/95 backdrop-blur border-b border-gray-800/50"><div class="max-w-4xl mx-auto px-4 flex items-center justify-between h-14"><a href="/" class="text-sm font-semibold text-gray-300">PMSI</a><div class="flex items-center gap-2"><button onclick="copyLink()" id="copy-link-btn" class="px-3 py-1.5 text-sm text-gray-400 border border-gray-700 rounded-lg hover:text-gray-200 hover:border-gray-500 transition-colors">Copy Link</button>${isProtected ? '<span class="px-3 py-1.5 text-sm text-amber-200 border border-amber-500/30 rounded-lg bg-amber-500/10">Protected</span>' : `<a href="/#builder?fork=${id}" class="px-4 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-500 transition-colors">Fork in Builder</a>`}</div></div></nav>
-<div class="max-w-4xl mx-auto px-4 py-8 space-y-6"><div class="flex items-center justify-between"><div><h1 class="text-2xl font-light text-gray-100">${safeName}</h1><p class="text-sm text-gray-500 mt-1">by ${safeCreator} &middot; ${safeAsset}${indicator.published_at ? ' &middot; Published ' + new Date(indicator.published_at).toLocaleDateString('en-US', {month:'short',day:'numeric',year:'numeric'}) : ''}${(indicator.fork_count || 0) > 0 ? ' &middot; <span class="text-blue-400">' + indicator.fork_count + ' fork' + (indicator.fork_count !== 1 ? 's' : '') + '</span>' : ''}</p></div><div class="text-right"><div class="text-3xl font-bold text-gray-100">${scoreStr}</div><div class="text-sm text-gray-400">${label}</div></div></div>
-<div class="bg-gray-900/50 rounded-2xl p-6 border border-gray-800/50" style="height:350px"><canvas id="chart"></canvas></div>
+<div class="max-w-4xl mx-auto px-4 py-8 space-y-6"><div class="flex items-start justify-between gap-6"><div><h1 class="text-2xl font-light text-gray-100">${safeName}</h1><p class="text-sm text-gray-400 mt-2">Tracks ${safeAssetLabel} ${safeSector.toLowerCase()} sentiment${config.referenceAsset ? ` against ${safeReference}` : ' without a price benchmark'}.</p><p class="text-sm text-gray-500 mt-1">by ${safeCreator} &middot; underlying ${safeAssetLabel} &middot; ${constructionLabel} &middot; ${visibleMarketCount || '--'} inputs${indicator.published_at ? ' &middot; Published ' + new Date(indicator.published_at).toLocaleDateString('en-US', {month:'short',day:'numeric',year:'numeric'}) : ''}${(indicator.fork_count || 0) > 0 ? ' &middot; <span class="text-blue-400">' + indicator.fork_count + ' fork' + (indicator.fork_count !== 1 ? 's' : '') + '</span>' : ''}</p></div><div class="text-right shrink-0"><div class="text-3xl font-bold text-gray-100">${scoreStr}</div><div class="text-sm text-gray-400">${label}</div></div></div>
+<div class="bg-gray-900/50 rounded-2xl p-6 border border-gray-800/50"><div class="flex items-center justify-between gap-4 mb-4"><div><h2 class="text-sm font-medium text-gray-200">${safeAssetLabel} sentiment vs ${safeReference}</h2><p class="text-xs text-gray-500 mt-0.5">Underlying ${safeAssetLabel} · ${safeSector} · ${constructionLabel}</p></div><span class="text-[11px] text-gray-600">${dates.length} observations</span></div><div style="height:320px"><canvas id="chart"></canvas></div></div>
 <div class="grid grid-cols-1 md:grid-cols-3 gap-4"><div class="bg-gray-900/50 rounded-xl p-4 border border-gray-800/50"><h3 class="text-xs text-gray-500 uppercase mb-3">${isProtected ? 'Recipe' : 'Weights'}</h3><div class="space-y-2 text-sm">${weightEntries.join('')}</div>${!isProtected && config.fgEnabled ? `<div class="mt-2 text-sm flex justify-between"><span class="text-gray-400">Fear & Greed</span><span class="text-gray-200">${config.fgWeight}%</span></div>` : ''}</div><div class="bg-gray-900/50 rounded-xl p-4 border border-gray-800/50"><h3 class="text-xs text-gray-500 uppercase mb-3">Category Scores</h3><div class="space-y-2 text-sm">${breakdownEntries.join('')}</div></div><div class="bg-gray-900/50 rounded-xl p-4 border border-gray-800/50"><h3 class="text-xs text-gray-500 uppercase mb-3">API</h3><div class="text-sm space-y-2"><div class="text-gray-400">Endpoint</div><code class="text-xs text-blue-400 bg-gray-800 px-2 py-1 rounded block break-all">/api/v1/indicators/${id}</code><div class="text-gray-400 mt-2">Pricing</div><div class="text-gray-200">${priceInfo}</div></div></div></div></div>
-<script>const dates=${JSON.stringify(chartDates)};const scores=${JSON.stringify(chartScores)};const prices=${JSON.stringify(chartPrices)};const labels=dates.map(d=>new Date(d+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'}));const ctx=document.getElementById('chart').getContext('2d');new Chart(ctx,{type:'line',data:{labels,datasets:[{label:${JSON.stringify(indicator.name)},data:scores,borderColor:'#60a5fa',backgroundColor:'rgba(96,165,250,0.08)',borderWidth:2,fill:true,tension:0.3,pointRadius:0,yAxisID:'y'},{label:${JSON.stringify(config.asset+' Price')},data:prices,borderColor:'#9ca3af',borderWidth:1.5,fill:false,tension:0.3,pointRadius:0,yAxisID:'y2'}]},options:{responsive:true,maintainAspectRatio:false,animation:false,interaction:{mode:'index',intersect:false},plugins:{legend:{position:'bottom',labels:{color:'#9ca3af',usePointStyle:true,pointStyle:'line'}}},scales:{y:{min:0,max:100,grid:{color:'rgba(255,255,255,0.04)'},ticks:{color:'#6b7280'},title:{display:true,text:'Score',color:'#6b7280'}},y2:{position:'right',grid:{display:false},ticks:{color:'#9ca3af',callback:v=>'$'+(v/1000).toFixed(0)+'K'},title:{display:true,text:'Price',color:'#9ca3af'}},x:{grid:{display:false},ticks:{color:'#6b7280',maxRotation:0,maxTicksLimit:10}}}}});</script>
+<script>const dates=${JSON.stringify(chartDates)};const scores=${JSON.stringify(chartScores)};const prices=${JSON.stringify(chartPrices)};const labels=dates.map(d=>new Date(d+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'}));const ctx=document.getElementById('chart').getContext('2d');new Chart(ctx,{type:'line',data:{labels,datasets:[{label:${JSON.stringify(titleCaseAsset(config.asset)+' sentiment')},data:scores,borderColor:'#60a5fa',backgroundColor:'rgba(96,165,250,0.08)',borderWidth:2,fill:true,tension:0.3,pointRadius:0,yAxisID:'y'},{label:${JSON.stringify(safeReference)},data:prices,borderColor:'#9ca3af',borderWidth:1.5,fill:false,tension:0.3,pointRadius:0,yAxisID:'y2'}]},options:{responsive:true,maintainAspectRatio:false,animation:false,interaction:{mode:'index',intersect:false},plugins:{legend:{position:'bottom',labels:{color:'#9ca3af',usePointStyle:true,pointStyle:'line'}}},scales:{y:{min:0,max:100,grid:{color:'rgba(255,255,255,0.04)'},ticks:{color:'#6b7280'},title:{display:true,text:'Score',color:'#6b7280'}},y2:{position:'right',grid:{display:false},ticks:{color:'#9ca3af',callback:v=>'$'+(v/1000).toFixed(0)+'K'},title:{display:true,text:'Price',color:'#9ca3af'}},x:{grid:{display:false},ticks:{color:'#6b7280',maxRotation:0,maxTicksLimit:10}}}}});</script>
 <script>function copyLink(){navigator.clipboard.writeText(window.location.href).then(()=>{const btn=document.getElementById('copy-link-btn');btn.textContent='Copied!';setTimeout(()=>btn.textContent='Copy Link',2000)})}</script>
 </body></html>`;
   res.setHeader('Content-Type', 'text/html');

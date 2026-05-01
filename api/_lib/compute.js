@@ -28,6 +28,11 @@ function resolveReferenceAsset(indicator, weightsConfig = {}) {
   return 'btc_price';
 }
 
+function dateKey(value) {
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return String(value).slice(0, 10);
+}
+
 /**
  * Compute indicator timeseries server-side from market_snapshots table.
  * Supports both market-mode (indicator.markets) and legacy category-mode (indicator.weights).
@@ -62,34 +67,26 @@ async function computeIndicator(indicator) {
     }
   }
 
-  // Detect cross-sector: any market has explicit sector info
-  const hasCrossSector = isMarketMode && Object.values(rawMarkets).some(v => typeof v === 'object' && v?.sector);
-
   let dateMap, allDates;
 
   if (isMarketMode) {
-    // Per-market query — cross-sector skips asset filter
+    // Per-market query. Market IDs can move across asset/sector classifiers as
+    // exports improve, so match the browser's global market index behavior.
     const marketIds = Object.keys(markets);
-    const rows = hasCrossSector
-      ? await sql`
-          SELECT date, market_id, sentiment_signal, weight
-          FROM market_snapshots
-          WHERE market_id = ANY(${marketIds})
-          ORDER BY date
-        `
-      : await sql`
-          SELECT date, market_id, sentiment_signal, weight
-          FROM market_snapshots
-          WHERE sector = ${sectorId} AND asset = ${asset} AND market_id = ANY(${marketIds})
-          ORDER BY date
-        `;
+    const rows = await sql`
+      SELECT date, market_id, sentiment_signal, weight
+      FROM market_snapshots
+      WHERE market_id = ANY(${marketIds})
+      ORDER BY date
+    `;
 
     dateMap = {};
     allDates = new Set();
     for (const r of rows) {
-      allDates.add(r.date);
-      if (!dateMap[r.date]) dateMap[r.date] = {};
-      dateMap[r.date][r.market_id] = {
+      const d = dateKey(r.date);
+      allDates.add(d);
+      if (!dateMap[d]) dateMap[d] = {};
+      dateMap[d][r.market_id] = {
         ss: parseFloat(r.sentiment_signal),
         wt: parseFloat(r.weight),
       };
@@ -128,9 +125,10 @@ async function computeIndicator(indicator) {
     dateMap = {};
     allDates = new Set();
     for (const r of rows) {
-      allDates.add(r.date);
-      if (!dateMap[r.date]) dateMap[r.date] = {};
-      dateMap[r.date][r.cat] = { ws: parseFloat(r.ws), wt: parseFloat(r.wt) };
+      const d = dateKey(r.date);
+      allDates.add(d);
+      if (!dateMap[d]) dateMap[d] = {};
+      dateMap[d][r.cat] = { ws: parseFloat(r.ws), wt: parseFloat(r.wt) };
     }
   }
 
@@ -145,8 +143,11 @@ async function computeIndicator(indicator) {
   `;
   const refMap = {};
   for (const r of refs) {
-    refMap[r.date] = r;
+    refMap[dateKey(r.date)] = r;
   }
+
+  const latestSnapshotRows = await sql`SELECT MAX(date) AS date FROM market_snapshots`;
+  const currentSnapshotDate = latestSnapshotRows?.[0]?.date ? dateKey(latestSnapshotRows[0].date) : null;
 
   // Determine which reference key to use for price overlay
   const refPriceKey = referenceAsset;
@@ -225,7 +226,8 @@ async function computeIndicator(indicator) {
     }
   }
 
-  const latestScore = [...scores].reverse().find(s => s != null);
+  const latestDate = dates[dates.length - 1] || null;
+  const latestScore = latestDate && latestDate === currentSnapshotDate ? scores[scores.length - 1] : null;
   const predictive = computePredictiveScore(scores, prices);
 
   return {

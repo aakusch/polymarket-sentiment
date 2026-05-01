@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import logging
 from collections import defaultdict
+from datetime import date
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 
 import click
@@ -375,10 +377,20 @@ def export_sandbox(db: Database, sector: str = "crypto") -> dict:
     return {"ref": ref, "assets": assets_out}
 
 
+def _json_default(value):
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    raise TypeError(f"Object of type {value.__class__.__name__} is not JSON serializable")
+
+
 def _write_json(path: Path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
-        json.dump(data, f, separators=(",", ":"))
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w") as f:
+        json.dump(data, f, separators=(",", ":"), default=_json_default)
+    tmp.replace(path)
     size_kb = path.stat().st_size / 1024
     log.info("Wrote %s (%.1f KB)", path.name, size_kb)
 
