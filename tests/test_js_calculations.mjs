@@ -27,7 +27,7 @@ function loadSandbox() {
   };
   vm.createContext(context);
   vm.runInContext(
-    `${source}\nglobalThis.__sandboxExports = { computePredictiveScore, computeBacktest, computeBuilderTimeseries, computeIndicatorTimeseries, builderState };`,
+    `${source}\nglobalThis.__sandboxExports = { computePredictiveScore, computeBacktest, computeBuilderTimeseries, computeIndicatorTimeseries, invalidateMarketHistoryIndex, builderState };`,
     context
   );
   return { exports: context.__sandboxExports, context };
@@ -156,4 +156,49 @@ test('browser indicator series keeps politics default reference asset empty', ()
 
   assert.equal(result.scores[0], 100);
   assert.equal(result.prices[0], null);
+});
+
+test('browser market-mode series scopes duplicate market ids to indicator sector', () => {
+  const date = '2026-01-03';
+  sandboxContext.sectorDataCache.crypto = {
+    refMap: { [date]: { btc_price: 100 } },
+    sandbox: {
+      assets: {
+        BTC: {
+          dates: [date],
+          cats: {},
+          markets: {
+            dup: { cat: 'price_targets', ss: [1], wt: [1], q: 'crypto duplicate' },
+          },
+        },
+      },
+    },
+  };
+  sandboxContext.sectorDataCache.politics = {
+    refMap: { [date]: {} },
+    sandbox: {
+      assets: {
+        GOV: {
+          dates: [date],
+          cats: {},
+          markets: {
+            dup: { cat: 'other', ss: [-1], wt: [1], q: 'politics duplicate' },
+          },
+        },
+      },
+    },
+  };
+  sandbox.invalidateMarketHistoryIndex();
+
+  const cryptoResult = sandbox.computeIndicatorTimeseries(
+    { sector: 'crypto', asset: 'BTC', markets: { dup: { w: 100 } }, fgEnabled: false },
+    sandboxContext.sectorDataCache.crypto
+  );
+  const politicsResult = sandbox.computeIndicatorTimeseries(
+    { sector: 'politics', asset: 'GOV', markets: { dup: { w: 100 } }, fgEnabled: false },
+    sandboxContext.sectorDataCache.politics
+  );
+
+  assert.equal(cryptoResult.scores[0], 100);
+  assert.equal(politicsResult.scores[0], 0);
 });

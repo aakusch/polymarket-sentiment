@@ -8,7 +8,7 @@ async function renderApiPanel() {
     el.innerHTML = `
       <div class="app-surface rounded-xl p-8 text-center">
         <div class="text-gray-400 mb-2">Sign in to manage API keys</div>
-        <p class="text-gray-500 text-sm mb-4">Create API keys to access indicator data programmatically.</p>
+        <p class="text-gray-500 text-sm mb-4">Create API keys to access signal data programmatically.</p>
         <button onclick="openAuthModal()" class="px-5 py-2.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-500 transition-colors">Sign In</button>
       </div>`;
     return;
@@ -67,13 +67,13 @@ async function renderApiPanel() {
         </div>
       </section>`;
 
-    // Indicators with bundle pricing
+    // Signals with bundle pricing
     html += `
       <section class="mb-8">
-        <h2 class="text-lg font-medium text-gray-200 mb-4">Your Indicators</h2>`;
+        <h2 class="text-lg font-medium text-gray-200 mb-4">Your Signals</h2>`;
 
     if (indicators.length === 0) {
-      html += `<div class="bg-gray-900/50 rounded-xl p-6 border border-gray-800/50 text-center text-sm text-gray-500">No indicators. <a href="#builder" class="text-blue-400 hover:underline">Build one</a></div>`;
+      html += `<div class="bg-gray-900/50 rounded-xl p-6 border border-gray-800/50 text-center text-sm text-gray-500">No signals. <a href="#builder" class="text-blue-400 hover:underline">Build one</a></div>`;
     } else {
       html += `<div class="space-y-3">`;
       for (const ind of indicators) {
@@ -123,7 +123,7 @@ async function renderApiPanel() {
               <code class="text-sm text-blue-400">/api/v2/indicators</code>
               <span class="text-xs text-gray-500">0 credits</span>
             </div>
-            <p class="text-xs text-gray-400 mb-3">List all public indicators with scores and metadata.</p>
+            <p class="text-xs text-gray-400 mb-3">List all public signals with scores and metadata.</p>
             <details class="text-xs">
               <summary class="text-gray-500 cursor-pointer hover:text-gray-300">Query params & examples</summary>
               <div class="mt-2 space-y-2 text-gray-400">
@@ -146,7 +146,7 @@ async function renderApiPanel() {
               <code class="text-sm text-blue-400">/api/v2/indicators/{id}/latest</code>
               <span class="text-xs text-gray-500">1 credit</span>
             </div>
-            <p class="text-xs text-gray-400 mb-3">Get current score and label for an indicator. Cheapest call.</p>
+            <p class="text-xs text-gray-400 mb-3">Get current score and label for a signal. Cheapest call.</p>
           </div>
 
           <div class="bg-gray-900/50 rounded-xl p-4 border border-gray-800/50">

@@ -55,14 +55,17 @@ async function computeIndicator(indicator) {
   // Normalize market config: support { mid: number }, { mid: { weight, sector } }, { mid: { w, flip } }
   let markets = null;
   let marketFlips = {};
+  let marketSectors = {};
   if (isMarketMode) {
     markets = {};
     for (const [mid, val] of Object.entries(rawMarkets)) {
       if (typeof val === 'number') {
         markets[mid] = val;
+        marketSectors[mid] = sectorId;
       } else {
         markets[mid] = val?.w ?? val?.weight ?? 100;
         if (val?.flip) marketFlips[mid] = true;
+        marketSectors[mid] = val?.sector || sectorId;
       }
     }
   }
@@ -70,19 +73,22 @@ async function computeIndicator(indicator) {
   let dateMap, allDates;
 
   if (isMarketMode) {
-    // Per-market query. Market IDs can move across asset/sector classifiers as
-    // exports improve, so match the browser's global market index behavior.
+    // Per-market query. Market IDs are not globally unique across our sector
+    // snapshots, so scope every saved selection to its explicit sector or to
+    // the indicator sector by default.
     const marketIds = Object.keys(markets);
+    const sectors = [...new Set(Object.values(marketSectors).filter(Boolean))];
     const rows = await sql`
-      SELECT date, market_id, sentiment_signal, weight
+      SELECT date, market_id, sector, sentiment_signal, weight
       FROM market_snapshots
-      WHERE market_id = ANY(${marketIds})
+      WHERE market_id = ANY(${marketIds}) AND sector = ANY(${sectors})
       ORDER BY date
     `;
 
     dateMap = {};
     allDates = new Set();
     for (const r of rows) {
+      if (r.sector !== marketSectors[r.market_id]) continue;
       const d = dateKey(r.date);
       allDates.add(d);
       if (!dateMap[d]) dateMap[d] = {};
@@ -146,7 +152,14 @@ async function computeIndicator(indicator) {
     refMap[dateKey(r.date)] = r;
   }
 
-  const latestSnapshotRows = await sql`SELECT MAX(date) AS date FROM market_snapshots`;
+  const scoringSectors = isMarketMode
+    ? [...new Set(Object.values(marketSectors).filter(Boolean))]
+    : [sectorId];
+  const latestSnapshotRows = await sql`
+    SELECT MAX(date) AS date
+    FROM market_snapshots
+    WHERE sector = ANY(${scoringSectors})
+  `;
   const currentSnapshotDate = latestSnapshotRows?.[0]?.date ? dateKey(latestSnapshotRows[0].date) : null;
 
   // Determine which reference key to use for price overlay

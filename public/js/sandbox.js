@@ -1,10 +1,13 @@
-// ── Indicators & Builder — Multi-Sector Polymarket Indicators ────────────────
+// ── Signals & Builder - Multi-Sector Polymarket Signals ─────────────────────
 
 // ── Builder State ───────────────────────────────────────────────────────────
 
 let builderState = {
   chartInstance: null,
   selectedMarkets: {},  // { marketId: { w: weight, flip: bool } }
+  targetSector: 'crypto',
+  targetAssetKey: 'btc_price',
+  targetAsset: 'BTC',
   fgEnabled: false,
   fgWeight: 30,
   chartPeriod: 'ALL',
@@ -345,14 +348,13 @@ function getMarketHistoryIndex() {
     for (const [asset, ad] of Object.entries(ssd.sandbox.assets)) {
       const dates = ad.dates || [];
       for (const [mid, m] of Object.entries(ad.markets || {})) {
-        if (index[mid]) continue;
         const ssMap = {}, wtMap = {}, activeDates = [];
         for (let i = 0; i < dates.length; i++) {
           ssMap[dates[i]] = m.ss?.[i];
           wtMap[dates[i]] = m.wt?.[i];
           if (m.ss?.[i] != null || m.wt?.[i] != null) activeDates.push(dates[i]);
         }
-        index[mid] = {
+        const entry = {
           ssMap,
           wtMap,
           dates: activeDates,
@@ -364,6 +366,8 @@ function getMarketHistoryIndex() {
           sector: sId,
           asset,
         };
+        index[`${sId}:${mid}`] = entry;
+        if (!index[mid]) index[mid] = entry;
       }
     }
   }
@@ -394,7 +398,9 @@ function computeIndicatorTimeseries(config, sectorData) {
     const allDatesSet = new Set();
 
     for (const mid of Object.keys(config.markets)) {
-      const lookup = marketIndex[mid];
+      const rawCfg = config.markets[mid];
+      const scopedSector = rawCfg && typeof rawCfg === 'object' && rawCfg.sector ? rawCfg.sector : sectorId;
+      const lookup = marketIndex[`${scopedSector}:${mid}`] || marketIndex[mid];
       if (!lookup) continue;
       marketLookups[mid] = lookup;
       for (const d of lookup.dates) allDatesSet.add(d);
@@ -499,8 +505,9 @@ function computeBuilderTimeseries() {
   const marketLookups = {};
   const allDatesSet = new Set();
 
-  for (const mid of Object.keys(selectedMarkets)) {
-    const lookup = marketIndex[mid];
+  for (const [mid, cfg] of Object.entries(selectedMarkets)) {
+    const scopedSector = cfg && typeof cfg === 'object' && cfg.sector ? cfg.sector : (sd.targetSector === 'all' ? null : sd.targetSector);
+    const lookup = (scopedSector ? marketIndex[`${scopedSector}:${mid}`] : null) || marketIndex[mid];
     if (!lookup) continue;
     marketLookups[mid] = lookup;
     for (const d of lookup.dates) allDatesSet.add(d);
@@ -797,9 +804,9 @@ function renderIndicatorLoading() {
     </div>
   `).join('');
   return `
-    <div class="app-surface rounded-xl overflow-hidden" aria-label="Loading indicators">
+    <div class="app-surface rounded-xl overflow-hidden" aria-label="Loading signals">
       <div class="grid grid-cols-[44px_58px_1fr_80px] items-center gap-4 px-5 py-3 text-[11px] text-gray-600 uppercase tracking-wider">
-        <span></span><span>Score</span><span>Indicator</span><span class="hidden sm:block text-right">Stats</span>
+        <span></span><span>Score</span><span>Signal</span><span class="hidden sm:block text-right">Stats</span>
       </div>
       ${rows}
     </div>`;
@@ -876,12 +883,10 @@ function renderIndicatorInsights(rankedAll, ranked) {
   const predictiveLeaders = rankedAll.filter(r => (r.predictive?.score ?? 0) >= 60).length;
   const totalEngagement = rankedAll.reduce((sum, r) => sum + engagementScore(r.ind), 0);
   const top = [...rankedAll].filter(r => r.lastScore != null).sort((a, b) => b.lastScore - a.lastScore)[0];
-  const topLabel = top ? `${top.ind.name}` : 'No scored indicators yet';
-
   el.innerHTML = [
-    renderInsight('Visible', compactNumber(ranked.length), `${rankedAll.length} total strategies`, 'blue'),
+    renderInsight('Visible', compactNumber(ranked.length), `${rankedAll.length} total signals`, 'blue'),
     renderInsight('Avg score', avgScore == null ? '--' : avgScore.toFixed(1), `${withScores.length} scored signals`, avgScore != null && avgScore >= 60 ? 'green' : 'gray'),
-    renderInsight('Protected', compactNumber(protectedCount), 'paid API recipes', protectedCount > 0 ? 'amber' : 'gray'),
+    renderInsight('Protected', compactNumber(protectedCount), 'paid API signals', protectedCount > 0 ? 'amber' : 'gray'),
     renderInsight('Live pulse', compactNumber(totalEngagement), `checked ${formatLiveTime(indicatorLastCheckedAt)}`, totalEngagement > 0 ? 'green' : 'gray', true),
   ].join('');
 }
@@ -901,7 +906,7 @@ function renderIndicatorActivity(rankedAll) {
   if (!active.length) {
     el.innerHTML = `
       <div class="activity-rail">
-        <div class="activity-item"><span class="alive-dot"></span><span>Watching for new views, comments, forks, and published strategies</span></div>
+        <div class="activity-item"><span class="alive-dot"></span><span>Watching for new views, comments, forks, and published signals</span></div>
       </div>`;
     return;
   }
@@ -1061,11 +1066,11 @@ async function renderIndicatorsPage() {
         <div class="w-12 h-12 mx-auto mb-4 rounded-full bg-gray-800/60 flex items-center justify-center">
           <svg class="w-6 h-6 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
         </div>
-        <div class="text-gray-300 font-medium mb-1">No indicators yet</div>
-        <p class="text-gray-500 text-sm mb-5">Create your first sentiment indicator to start tracking markets.</p>
+        <div class="text-gray-300 font-medium mb-1">No signals yet</div>
+        <p class="text-gray-500 text-sm mb-5">Create your first market signal to start tracking prediction markets.</p>
         <a href="#builder" class="inline-flex items-center gap-1.5 px-5 py-2.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-500 active:scale-[0.97] transition-all shadow-lg shadow-blue-600/20">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-          Build Indicator
+          Build Signal
         </a>
       </div>`;
     container.dataset.ready = 'true';
@@ -1351,9 +1356,10 @@ async function editIndicator(id) {
   if (!ind) return;
   builderState.builderStarted = true;
   builderState.editingId = id;
+  setBuilderTargetFromIndicator(ind);
   builderState.fgEnabled = ind.fgEnabled || false;
   builderState.fgWeight = ind.fgWeight || 30;
-  builderState.referenceAsset = ind.referenceAsset || null;
+  builderState.referenceAsset = ind.referenceAsset ?? builderState.referenceAsset ?? null;
   builderState._pendingName = ind.name || '';
   location.hash = '#builder?id=' + id;
 }
@@ -1379,12 +1385,15 @@ function forkFromData(ind, sourceId) {
   if (!canForkIndicator(ind)) { protectedForkMessage(); return; }
   builderState.editingId = null;
   builderState.builderStarted = true;
+  setBuilderTargetFromIndicator(ind);
   builderState._pendingName = (ind.name || 'Indicator') + ' (fork)';
   builderState._pendingForkedFrom = sourceId;
   builderState._pendingForkSource = JSON.parse(JSON.stringify(ind));
   builderState.fgEnabled = ind.fgEnabled || false;
   builderState.fgWeight = ind.fgWeight || 30;
-  builderState.referenceAsset = ind.referenceAsset ?? SECTORS[ind.sector || 'crypto']?.referenceData?.priceKey ?? null;
+  builderState.referenceAsset = Object.prototype.hasOwnProperty.call(ind, 'referenceAsset')
+    ? ind.referenceAsset
+    : (SECTORS[ind.sector || 'crypto']?.referenceData?.priceKey ?? null);
   builderState.initialized = false;
 
   if (ind.markets) {
@@ -1725,9 +1734,9 @@ async function renderIndicatorDetail() {
     for (const [mid, rawW] of Object.entries(ind.markets)) {
       const w = typeof rawW === 'object' ? (rawW.w ?? 100) : (typeof rawW === 'number' ? rawW : 100);
       const flip = typeof rawW === 'object' ? !!rawW.flip : false;
-      const meta = marketIndex[mid] || getMarketMeta(mid);
       const cfgSector = typeof rawW === 'object' ? rawW.sector : null;
       const cfgAsset = typeof rawW === 'object' ? rawW.asset : null;
+      const meta = marketIndex[`${cfgSector || sector}:${mid}`] || marketIndex[mid] || getMarketMeta(mid);
       entries.push({
         mid,
         name: meta?.q || mid,
@@ -2023,6 +2032,9 @@ function showBuilderWorkspace() {
 function clearBuilderFormValues() {
   const nameEl = document.getElementById('builder-name');
   if (nameEl) nameEl.value = '';
+  const sectorEl = document.getElementById('builder-target-sector');
+  if (sectorEl) sectorEl.value = builderState.targetSector || 'crypto';
+  syncBuilderTargetControls();
   for (const id of ['bp-10', 'bp-50', 'bp-100', 'bp-500']) {
     const el = document.getElementById(id);
     if (el) el.value = '';
@@ -2035,6 +2047,9 @@ function resetBuilderDraft() {
     builderState.chartInstance = null;
   }
   builderState.selectedMarkets = {};
+  builderState.targetSector = 'crypto';
+  builderState.targetAssetKey = 'btc_price';
+  builderState.targetAsset = 'BTC';
   builderState.fgEnabled = false;
   builderState.fgWeight = 30;
   builderState.chartPeriod = 'ALL';
@@ -2048,6 +2063,116 @@ function resetBuilderDraft() {
   delete builderState._pendingForkSource;
   delete builderState._forkLoaded;
   clearBuilderFormValues();
+}
+
+function targetAssetOptionsForSector(sectorId) {
+  const allowedSector = sectorId && sectorId !== 'all' ? sectorId : null;
+  return (ALL_REFERENCE_ASSETS || [])
+    .filter(a => a.key && a.key !== 'fear_greed')
+    .filter(a => !allowedSector || a.sector === allowedSector)
+    .map(a => ({
+      key: a.key,
+      label: a.label,
+      sector: a.sector,
+    }));
+}
+
+function defaultTargetForSector(sectorId) {
+  const opts = targetAssetOptionsForSector(sectorId);
+  if (opts.length > 0) return opts[0];
+  return { key: 'other', label: sectorId === 'politics' ? 'Election or policy theme' : 'Qualitative theme' };
+}
+
+function targetKeyForAsset(asset) {
+  const normalized = String(asset || '').trim().toLowerCase();
+  if (!normalized) return null;
+  const match = (ALL_REFERENCE_ASSETS || [])
+    .filter(a => a.key && a.key !== 'fear_greed')
+    .find(a => a.label.toLowerCase() === normalized || a.id?.toLowerCase() === normalized || a.key?.toLowerCase() === normalized);
+  return match?.key || null;
+}
+
+function setBuilderTargetFromIndicator(ind = {}) {
+  builderState.targetSector = ind.sector || builderState.targetSector || 'crypto';
+  const key = ind.referenceAsset ?? targetKeyForAsset(ind.asset);
+  const ref = key ? (ALL_REFERENCE_ASSETS || []).find(a => a.key === key) : null;
+  if (ref) {
+    builderState.targetAssetKey = ref.key;
+    builderState.targetAsset = ref.label;
+  } else {
+    builderState.targetAssetKey = 'other';
+    builderState.targetAsset = ind.asset || builderState.targetAsset || '';
+  }
+}
+
+function syncBuilderTargetControls() {
+  const sectorEl = document.getElementById('builder-target-sector');
+  if (sectorEl && sectorEl.value !== (builderState.targetSector || 'all')) sectorEl.value = builderState.targetSector || 'all';
+  const selectEl = document.getElementById('builder-target-asset-select');
+  const customWrap = document.getElementById('builder-target-custom-wrap');
+  const customEl = document.getElementById('builder-target-asset-custom');
+  const opts = targetAssetOptionsForSector(builderState.targetSector);
+  const currentKey = builderState.targetAssetKey || targetKeyForAsset(builderState.targetAsset) || 'other';
+  if (selectEl) {
+    selectEl.innerHTML = [
+      ...opts.map(opt => `<option value="${opt.key}">${escapeHtml(opt.label)}</option>`),
+      '<option value="other">Other / qualitative</option>',
+    ].join('');
+    selectEl.value = opts.some(opt => opt.key === currentKey) ? currentKey : 'other';
+  }
+  const isOther = !opts.some(opt => opt.key === currentKey);
+  customWrap?.classList.toggle('hidden', !isOther);
+  if (customEl && customEl.value !== (isOther ? (builderState.targetAsset || '') : '')) {
+    customEl.value = isOther ? (builderState.targetAsset || '') : '';
+  }
+  const note = document.getElementById('builder-target-note');
+  if (note) {
+    const sector = builderState.targetSector === 'all' ? 'all domains' : (SECTORS[builderState.targetSector]?.label || builderState.targetSector);
+    const asset = String(builderState.targetAsset || '').trim();
+    note.textContent = asset ? `Showing ${sector} markets related to "${asset}"` : `Showing ${sector} markets`;
+  }
+}
+
+function setBuilderTargetSector(sector) {
+  builderState.targetSector = sector || 'all';
+  const next = defaultTargetForSector(builderState.targetSector);
+  builderState.targetAssetKey = next.key === 'other' ? 'other' : next.key;
+  builderState.targetAsset = next.label;
+  if (!builderState.editingId) {
+    builderState.referenceAsset = next.key === 'other' ? null : next.key;
+  }
+  renderBuilderTestAgainst();
+  syncBuilderTargetControls();
+  renderBuilderMarketPicker();
+  updateBuilderChart();
+}
+
+function setBuilderTargetAssetChoice(value) {
+  const key = value || 'other';
+  if (key === 'other') {
+    builderState.targetAssetKey = 'other';
+    if (!builderState.targetAsset || targetKeyForAsset(builderState.targetAsset)) {
+      builderState.targetAsset = '';
+    }
+    builderState.referenceAsset = null;
+  } else {
+    const opt = targetAssetOptionsForSector(builderState.targetSector).find(a => a.key === key)
+      || (ALL_REFERENCE_ASSETS || []).find(a => a.key === key);
+    builderState.targetAssetKey = key;
+    builderState.targetAsset = opt?.label || key;
+    builderState.referenceAsset = key;
+  }
+  renderBuilderTestAgainst();
+  syncBuilderTargetControls();
+  renderBuilderMarketPicker();
+  updateBuilderChart();
+}
+
+function setBuilderCustomTarget(value) {
+  builderState.targetAssetKey = 'other';
+  builderState.targetAsset = String(value || '').trim();
+  syncBuilderTargetControls();
+  renderBuilderMarketPicker();
 }
 
 function startNewBuilder() {
@@ -2072,6 +2197,7 @@ function hasBuilderContext(editId, forkId) {
 
 function copyIndicatorMarketsToBuilder(ind) {
   if (!ind) return;
+  setBuilderTargetFromIndicator(ind);
   if (ind.markets) {
     builderState.selectedMarkets = typeof ind.markets === 'object'
       ? normalizeMarketConfig(ind.markets, ind.sector || 'crypto')
@@ -2121,9 +2247,10 @@ async function renderBuilderPage() {
     builderState.editingId = editId;
     const ind = (await getIndicators()).find(i => i.id === editId);
     if (ind) {
+      setBuilderTargetFromIndicator(ind);
       builderState.fgEnabled = ind.fgEnabled || false;
       builderState.fgWeight = ind.fgWeight || 30;
-      builderState.referenceAsset = ind.referenceAsset || null;
+      builderState.referenceAsset = ind.referenceAsset ?? builderState.referenceAsset ?? null;
       const nameEl = document.getElementById('builder-name');
       if (nameEl) nameEl.value = ind.name || builderState._pendingName || '';
     }
@@ -2165,6 +2292,8 @@ async function renderBuilderPage() {
   renderBuilderTestAgainst();
   renderBuilderSignalSources();
   syncBuilderControls();
+  syncBuilderTargetControls();
+  syncBuilderTargetControls();
 
   if (!builderState.initialized) {
     initBuilderChart();
@@ -2237,7 +2366,10 @@ function _getAllMarkets() {
 }
 
 function getMarketMeta(mid) {
-  return _getAllMarkets().find(m => m.mid === mid) || null;
+  const scopedSector = builderState.targetSector && builderState.targetSector !== 'all' ? builderState.targetSector : null;
+  return _getAllMarkets().find(m => m.mid === mid && (!scopedSector || m._sId === scopedSector))
+    || _getAllMarkets().find(m => m.mid === mid)
+    || null;
 }
 
 function makeMarketConfig(mid, weight = 100, flip = false, meta = null) {
@@ -2252,17 +2384,31 @@ function makeMarketConfig(mid, weight = 100, flip = false, meta = null) {
 
 function _filterAndSortMarkets(all) {
   const search = builderState.marketSearch.toLowerCase();
+  const targetSector = builderState.targetSector || 'all';
+  const targetAsset = String(builderState.targetAsset || '').trim().toLowerCase();
   const hideExpired = document.getElementById('builder-hide-expired')?.checked ?? true;
   const hideResolved = document.getElementById('builder-hide-resolved')?.checked ?? true;
-  const sortBy = document.getElementById('builder-market-sort')?.value || 'volume';
+  const sortBy = document.getElementById('builder-market-sort')?.value || 'relevance';
   const today = new Date().toISOString().slice(0, 10);
 
   let filtered = all;
+  if (targetSector !== 'all') filtered = filtered.filter(m => m._sId === targetSector);
+  if (targetAsset) {
+    filtered = filtered.filter(m => {
+      const q = String(m.q || '').toLowerCase();
+      const asset = String(m._asset || '').toLowerCase();
+      const cat = String(m.cat || '').toLowerCase().replace(/_/g, ' ');
+      return asset === targetAsset || q.includes(targetAsset) || cat.includes(targetAsset);
+    });
+  }
   if (search) filtered = filtered.filter(m => m.q.toLowerCase().includes(search));
   if (hideExpired) filtered = filtered.filter(m => !m.end || m.end >= today);
   if (hideResolved) filtered = filtered.filter(m => m.prob == null || (m.prob > 0.02 && m.prob < 0.98));
 
   switch (sortBy) {
+    case 'relevance':
+      filtered.sort((a, b) => _marketRelevanceScore(b, targetAsset) - _marketRelevanceScore(a, targetAsset) || (b.vol || 0) - (a.vol || 0) || b.latestWt - a.latestWt);
+      break;
     case 'volume': filtered.sort((a, b) => (b.vol || 0) - (a.vol || 0) || b.latestWt - a.latestWt); break;
     case 'resolution': filtered.sort((a, b) => {
       const ae = a.end || '9999'; const be = b.end || '9999';
@@ -2273,6 +2419,19 @@ function _filterAndSortMarkets(all) {
     case 'alpha': filtered.sort((a, b) => a.q.localeCompare(b.q)); break;
   }
   return filtered;
+}
+
+function _marketRelevanceScore(m, targetAsset) {
+  let score = 0;
+  const q = String(m.q || '').toLowerCase();
+  const asset = String(m._asset || '').toLowerCase();
+  const t = String(targetAsset || '').toLowerCase();
+  if (t && asset === t) score += 100;
+  if (t && q.includes(t)) score += 45;
+  if (m.prob != null && m.prob > 0.02 && m.prob < 0.98) score += 20;
+  if (m.end && m.end >= new Date().toISOString().slice(0, 10)) score += 15;
+  score += Math.min(20, Math.log10((m.vol || 0) + 1) * 3);
+  return score;
 }
 
 function _fmtEndDate(d) {
@@ -3037,10 +3196,12 @@ async function saveBuilderIndicator() {
     }
   }
 
-  const indicator = {
-    id: builderState.editingId || generateId(),
-    name,
-    markets: { ...builderState.selectedMarkets },
+	  const indicator = {
+	    id: builderState.editingId || generateId(),
+	    name,
+	    sector: builderState.targetSector === 'all' ? 'crypto' : (builderState.targetSector || 'crypto'),
+	    asset: builderState.targetAsset || 'MIXED',
+	    markets: { ...builderState.selectedMarkets },
     referenceAsset: builderState.referenceAsset,
     fgEnabled: builderState.fgEnabled,
     fgWeight: builderState.fgWeight,
@@ -3106,9 +3267,10 @@ function loadBuilderIndicator(id) {
 
   builderState.builderStarted = true;
   builderState.editingId = id;
+  setBuilderTargetFromIndicator(ind);
   builderState.fgEnabled = ind.fgEnabled || false;
   builderState.fgWeight = ind.fgWeight || 30;
-  builderState.referenceAsset = ind.referenceAsset || null;
+  builderState.referenceAsset = ind.referenceAsset ?? builderState.referenceAsset ?? null;
 
   // Restore bundle prices
   const bp = ind.bundlePrices || {};

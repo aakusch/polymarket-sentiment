@@ -1,18 +1,19 @@
-# Polymarket Sentiment Indicators (PMSI)
+# Polymarket Signals Lab
 
-Real-time sentiment indicators built from Polymarket prediction markets across crypto, stocks, economy, and politics.
+A community signal lab for building quantitative and qualitative indicators from Polymarket prediction markets across crypto, stocks, economy, and politics.
 
 ## What it does
 
-PMSI aggregates probability data from thousands of Polymarket prediction markets and computes weighted sentiment scores. Users can build custom indicators by selecting specific markets, adjusting weights, inverting bearish markets, and backtesting strategies against reference assets like BTC, S&P 500, gold, or treasury yields.
+Signals Lab aggregates probability data from thousands of Polymarket prediction markets and computes weighted signal scores. Users can build custom signals by selecting specific markets, adjusting weights, inverting bearish markets, and backtesting against reference assets like BTC, S&P 500, gold, treasury yields, or qualitative outcome themes.
 
 ## Features
 
 - **Multi-sector coverage** — Crypto, stocks, economy, and politics markets
-- **Custom indicator builder** — Select individual markets, adjust weights, flip polarity
-- **16 reference assets** — Test indicators against BTC, ETH, SOL, S&P 500, Nasdaq, VIX, treasuries, gold, oil, and more
+- **Custom signal builder** — Select individual markets, adjust weights, flip polarity
+- **16 reference assets** — Test signals against BTC, ETH, SOL, S&P 500, Nasdaq, VIX, treasuries, gold, oil, and more
 - **Backtest engine** — Momentum, contrarian, and long-only strategies with equity curve, Sharpe ratio, and alpha
-- **Cross-sector mixing** — Combine markets from any sector into one indicator
+- **Targeted relevance filtering** — Start from an asset, event, league, policy theme, or outcome and see related markets first
+- **Cross-sector mixing** — Combine markets from any sector into one signal
 - **Fear & Greed blending** — Optional sentiment signal overlay
 - **API access** — Public REST API with API key authentication
 
@@ -51,7 +52,7 @@ npx vercel dev
 ```
 
 Without `DATABASE_URL`, the local app can still serve committed static JSON, but DB-backed routes
-such as public indicators, comments, views, auth, and API keys will return a database configuration
+such as public signals, comments, views, auth, and API keys will return a database configuration
 error.
 
 ## Production setup
@@ -82,7 +83,7 @@ ALERT_FROM_EMAIL=...
 vercel env pull .env.local
 ```
 
-5. Initialize the database and demo indicators:
+5. Initialize the database and demo signals:
 
 ```bash
 npm run setup:db
@@ -90,7 +91,7 @@ npm run seed:demo
 ```
 
 6. Trigger the `Daily Snapshot` GitHub Action once. It runs all sectors, exports
-`public/data/*.json`, validates the files, updates public indicator scores, commits the refreshed
+`public/data/*.json`, validates the files, updates public signal scores, commits the refreshed
 data, and Vercel redeploys from Git.
 
 ## Project structure

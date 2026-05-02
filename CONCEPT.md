@@ -1,16 +1,16 @@
-# PMSI — Concept & Logic
+# Polymarket Signals Lab — Concept & Logic
 
 ## The Concept
 
 Prediction markets are one of the best real-time gauges of collective belief. When thousands of people put money on whether Bitcoin will hit $100K, whether the Fed will cut rates, or whether a candidate will win an election, the resulting probabilities encode genuine conviction — not just opinion polls or analyst forecasts, but skin-in-the-game estimates of what will actually happen.
 
-PMSI turns this into a usable signal. It ingests probability data from Polymarket's public markets, classifies each market by sector and category, and lets users compose custom sentiment indicators by selecting, weighting, and combining individual markets. The output is a 0-100 sentiment score that tracks how bullish or bearish the collective prediction market is on a given theme — and that score can be overlaid against real asset prices to see if the crowd is actually predictive.
+Signals Lab turns this into a usable signal. It ingests probability data from Polymarket's public markets, classifies each market by sector and category, and lets users compose custom market signals by selecting, weighting, and combining individual markets. The output is a 0-100 score that can track a quantitative asset, a policy theme, an election, or a related outcome market — and that score can be overlaid against real prices or probabilities to see if the crowd is actually predictive.
 
-The key insight: a single prediction market is noisy, but a weighted composite of many related markets smooths out the noise and produces a signal with measurable correlation to actual price movements. By letting users pick which markets matter, adjust their influence, and flip the polarity of bearish markets, PMSI turns raw prediction data into a structured, backtestable sentiment indicator.
+The key insight: a single prediction market is noisy, but a weighted composite of many related markets can smooth out the noise and produce a signal with measurable relationships to actual prices or downstream outcome probabilities. By letting users pick which markets matter, adjust their influence, and flip the polarity of bearish markets, Signals Lab turns raw prediction data into structured, backtestable signals.
 
 **Who it's for:** Crypto traders looking for non-price signals, macro analysts tracking policy sentiment, researchers studying prediction market efficiency, or anyone who wants to quantify "what does the crowd think?" and test whether it's worth listening to.
 
-**What makes it different:** Most sentiment tools use social media volume or survey data. PMSI uses prediction market probabilities — real money, real stakes, real-time updates — across 4 sectors with 16 reference assets for backtesting.
+**What makes it different:** Most sentiment tools use social media volume or survey data. Signals Lab uses prediction market probabilities — real money, real stakes, real-time updates — across 4 sectors with reference assets and outcome themes for backtesting.
 
 ---
 
@@ -18,7 +18,7 @@ The key insight: a single prediction market is noisy, but a weighted composite o
 
 ### Setup
 
-Say we want to build a BTC sentiment indicator. We pick 3 markets from Polymarket:
+Say we want to build a BTC market signal. We pick 3 markets from Polymarket:
 
 | Market | Question | Latest Prob | Category |
 |--------|----------|-------------|----------|
@@ -93,6 +93,6 @@ The backtest engine tests whether trading on this signal would have been profita
 
 Each strategy tracks an equity curve, computes a Sharpe ratio, and compares returns against a simple buy-and-hold benchmark.
 
-### Real Result
+### Related Outcome Signals
 
-The BTC Price Tracker indicator shipped with PMSI uses 10 markets (6 price targets, 3 flipped dip/sell markets, 1 event market) and achieves a **+0.976 correlation** with BTC price over 134 daily data points — meaning the composite prediction market signal tracks actual price movement almost perfectly.
+The same structure can model qualitative relationships. For example, a soccer signal could combine match-result, injury, transfer, and head-to-head markets to track whether those inputs lead the league-winner odds market. In that case the reference target is another prediction market probability rather than an external asset price.

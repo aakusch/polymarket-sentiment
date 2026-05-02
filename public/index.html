@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Polymarket Sentiment Indicators</title>
+  <title>Polymarket Signals Lab</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/og-default.png">
   <script src="https://cdn.tailwindcss.com"></script>
@@ -212,8 +212,8 @@
       <div class="flex items-center justify-between min-h-14 gap-3">
         <div class="flex flex-1 items-center gap-1 min-w-0 overflow-x-auto">
           <span class="brand-mark mr-2 hidden sm:inline-flex" aria-hidden="true"></span>
-          <span class="text-sm font-semibold text-gray-300 mr-4 hidden md:inline">PMSI</span>
-          <a href="#indicators" data-nav="indicators" class="nav-link px-3 py-4 text-sm text-gray-500 border-b-2 border-transparent hover:text-gray-300">Indicators</a>
+          <span class="text-sm font-semibold text-gray-300 mr-4 hidden md:inline">Signals Lab</span>
+          <a href="#indicators" data-nav="indicators" class="nav-link px-3 py-4 text-sm text-gray-500 border-b-2 border-transparent hover:text-gray-300">Signals</a>
           <a href="#builder" data-nav="builder" class="nav-link px-3 py-4 text-sm text-gray-500 border-b-2 border-transparent hover:text-gray-300">Builder</a>
           <a href="#api" data-nav="api" class="nav-link px-3 py-4 text-sm text-gray-500 border-b-2 border-transparent hover:text-gray-300">API</a>
           <a href="#docs" data-nav="docs" class="nav-link px-3 py-4 text-sm text-gray-500 border-b-2 border-transparent hover:text-gray-300">Docs</a>
@@ -228,16 +228,16 @@
 
   <div class="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
 
-    <!-- INDICATORS PAGE -->
+    <!-- SIGNALS PAGE -->
     <div id="page-indicators" class="page space-y-4">
       <div class="flex items-center justify-between gap-3 flex-wrap">
         <div class="min-w-0">
-          <h1 class="text-2xl font-semibold text-gray-100 tracking-tight">Indicators</h1>
+          <h1 class="text-2xl font-semibold text-gray-100 tracking-tight">Signals Lab</h1>
           <div id="indicator-insights" class="mt-1 flex items-center gap-3 text-xs text-gray-500 flex-wrap"></div>
         </div>
         <a href="#builder" class="inline-flex items-center gap-1.5 px-3.5 py-2 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-500 active:scale-[0.97] transition-all shadow-lg shadow-blue-600/20">
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-          New Indicator
+          New Signal
         </a>
       </div>
 
@@ -245,7 +245,7 @@
         <div class="grid grid-cols-1 lg:grid-cols-[minmax(240px,1fr)_auto] gap-3 items-center">
           <div class="ind-search flex items-center gap-2 px-3 h-10">
             <svg class="w-4 h-4 text-gray-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M21 21l-4.35-4.35M10.5 18a7.5 7.5 0 110-15 7.5 7.5 0 010 15z"/></svg>
-            <input id="ind-search" oninput="setIndicatorSearch(this.value)" placeholder="Search name, creator, sector, asset..." class="w-full bg-transparent text-sm text-gray-200 placeholder-gray-600 outline-none">
+            <input id="ind-search" oninput="setIndicatorSearch(this.value)" placeholder="Search signal, creator, sector, asset..." class="w-full bg-transparent text-sm text-gray-200 placeholder-gray-600 outline-none">
             <button id="ind-clear-search" onclick="setIndicatorSearch('')" class="hidden text-gray-600 hover:text-gray-300" title="Clear search">
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
             </button>
@@ -284,7 +284,7 @@
       <!-- Comparison overlay chart -->
       <div id="comparison-panel" class="hidden mt-6 app-surface rounded-xl p-6">
         <div class="flex items-center justify-between mb-3">
-          <h3 class="text-sm font-medium text-gray-300">Indicator Comparison</h3>
+          <h3 class="text-sm font-medium text-gray-300">Signal Comparison</h3>
           <button onclick="comparisonState.selected.clear(); updateComparisonUI();" class="text-xs text-gray-500 hover:text-gray-300">Clear</button>
         </div>
         <div style="height:280px"><canvas id="comparison-chart"></canvas></div>
@@ -301,24 +301,24 @@
 
       <div id="builder-choice" class="max-w-4xl mx-auto py-8 sm:py-14">
         <div class="mb-7">
-          <h1 class="text-2xl font-semibold text-gray-100 mb-2">Builder</h1>
-          <p class="text-sm text-gray-500">Choose a clean draft or use an existing indicator as your starting point.</p>
+          <h1 class="text-2xl font-semibold text-gray-100 mb-2">Signal Builder</h1>
+          <p class="text-sm text-gray-500">Build a quantitative or qualitative market basket around an asset, event, league, policy theme, or outcome market.</p>
         </div>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
           <button onclick="startNewBuilder()" class="group app-surface rounded-xl p-6 text-left hover:border-blue-500/45 transition-all">
             <div class="w-10 h-10 rounded-lg bg-blue-600/15 border border-blue-500/25 text-blue-300 flex items-center justify-center mb-5 group-hover:bg-blue-600/25 transition-colors">
               <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
             </div>
-            <div class="text-base font-semibold text-gray-100 mb-1">Start New Build</div>
-            <div class="text-sm text-gray-500 leading-relaxed">Open a blank builder with no selected markets and default backtest settings.</div>
+            <div class="text-base font-semibold text-gray-100 mb-1">Start New Signal</div>
+            <div class="text-sm text-gray-500 leading-relaxed">Choose a target, then start from the most relevant Polymarket markets.</div>
           </button>
 
           <button onclick="openForkIndicatorModal()" class="group app-surface rounded-xl p-6 text-left hover:border-green-500/45 transition-all">
             <div class="w-10 h-10 rounded-lg bg-green-600/15 border border-green-500/25 text-green-300 flex items-center justify-center mb-5 group-hover:bg-green-600/25 transition-colors">
               <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M4 4h10v10H4zM10 10h10v10H10z"/></svg>
             </div>
-            <div class="text-base font-semibold text-gray-100 mb-1">Fork Existing Build</div>
-            <div class="text-sm text-gray-500 leading-relaxed">Search public and saved indicators, then copy one into a new editable draft.</div>
+            <div class="text-base font-semibold text-gray-100 mb-1">Fork Existing Signal</div>
+            <div class="text-sm text-gray-500 leading-relaxed">Search public and saved signals, then copy one into a new editable draft.</div>
           </button>
         </div>
       </div>
@@ -327,7 +327,7 @@
 
       <!-- Top bar: Name + Save -->
       <div class="flex items-center gap-3 mb-5">
-        <input type="text" id="builder-name" placeholder="Indicator name…"
+        <input type="text" id="builder-name" placeholder="Signal name..."
           class="flex-1 px-4 py-2 text-sm bg-gray-800/50 border border-gray-600/40 rounded-lg text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-500/60">
         <div class="relative">
           <button onclick="toggleBuilderLoadMenu()" class="px-3 py-2 text-xs text-gray-400 bg-gray-800/50 border border-gray-600/40 rounded-lg hover:text-gray-200 hover:border-gray-500 transition-colors">
@@ -335,7 +335,36 @@
           </button>
           <div id="builder-load-menu" class="hidden absolute right-0 mt-1 w-56 bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-10 py-1"></div>
         </div>
-        <button onclick="saveBuilderIndicator()" class="px-5 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-500 transition-colors font-medium">Save</button>
+          <button onclick="saveBuilderIndicator()" class="px-5 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-500 transition-colors font-medium">Save</button>
+      </div>
+
+      <div class="app-surface rounded-xl p-3 mb-4">
+        <div class="grid grid-cols-1 md:grid-cols-[150px_220px_minmax(220px,1fr)_auto] gap-2 items-end">
+          <label class="block">
+            <span class="text-[10px] text-gray-500 uppercase tracking-wide block mb-1">Signal domain</span>
+            <select id="builder-target-sector" onchange="setBuilderTargetSector(this.value)"
+              class="w-full px-2.5 py-2 text-xs bg-gray-800/50 border border-gray-600/40 rounded-lg text-gray-300 focus:outline-none focus:border-blue-500/50">
+              <option value="all">Any domain</option>
+              <option value="crypto">Crypto</option>
+              <option value="stocks">Stocks</option>
+              <option value="economy">Economy</option>
+              <option value="politics">Politics</option>
+            </select>
+          </label>
+          <label class="block">
+            <span class="text-[10px] text-gray-500 uppercase tracking-wide block mb-1">Underlying target</span>
+            <select id="builder-target-asset-select" onchange="setBuilderTargetAssetChoice(this.value)"
+              class="w-full px-2.5 py-2 text-xs bg-gray-800/50 border border-gray-600/40 rounded-lg text-gray-300 focus:outline-none focus:border-blue-500/50">
+            </select>
+          </label>
+          <label id="builder-target-custom-wrap" class="block hidden">
+            <span class="text-[10px] text-gray-500 uppercase tracking-wide block mb-1">Qualitative target</span>
+            <input id="builder-target-asset-custom" type="text" value="" oninput="setBuilderCustomTarget(this.value)"
+              placeholder="Champions League, Fed cuts, election, league winner..."
+              class="w-full px-3 py-2 text-xs bg-gray-800/50 border border-gray-600/40 rounded-lg text-gray-100 placeholder-gray-600 focus:outline-none focus:border-blue-500/50">
+          </label>
+          <div id="builder-target-note" class="text-[11px] text-gray-500 md:text-right"></div>
+        </div>
       </div>
 
       <!-- Bundle Pricing (collapsible) -->
@@ -479,6 +508,7 @@
             <div class="flex items-center gap-2 text-[10px] flex-wrap">
               <select id="builder-market-sort" onchange="onBuilderMarketSort(this.value)"
                 class="bg-gray-800/50 border border-gray-600/40 text-gray-400 rounded px-1.5 py-1 text-[10px] focus:outline-none cursor-pointer">
+                <option value="relevance">Relevance</option>
                 <option value="volume">Volume</option>
                 <option value="resolution">Resolution</option>
                 <option value="prob_high">Prob ↓</option>
@@ -488,12 +518,12 @@
               <label class="flex items-center gap-1 text-gray-500 cursor-pointer select-none">
                 <input type="checkbox" id="builder-hide-expired" checked onchange="onBuilderFilterChange()"
                   class="rounded bg-gray-700 border-gray-600 w-2.5 h-2.5 cursor-pointer">
-                Expired
+                Hide expired
               </label>
               <label class="flex items-center gap-1 text-gray-500 cursor-pointer select-none">
                 <input type="checkbox" id="builder-hide-resolved" checked onchange="onBuilderFilterChange()"
                   class="rounded bg-gray-700 border-gray-600 w-2.5 h-2.5 cursor-pointer">
-                Resolved
+                Hide resolved
               </label>
               <span id="builder-market-count" class="text-gray-500 ml-auto tabular-nums"></span>
             </div>
@@ -522,7 +552,7 @@
 
     <!-- Footer -->
     <footer class="text-center text-xs text-gray-500 py-6 mt-8">
-      Data from Polymarket public APIs &middot; Scores are informational only, not financial advice.
+      Data from Polymarket public APIs &middot; Signals are informational only, not financial advice.
     </footer>
 
   </div>
@@ -570,8 +600,8 @@
   <div id="fork-modal" class="hidden fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
     <div class="bg-[#1a1d27] rounded-xl border border-gray-600/50 w-full max-w-2xl mx-4 p-5 relative shadow-2xl">
       <button onclick="closeForkIndicatorModal()" class="absolute top-4 right-4 text-gray-500 hover:text-gray-300 text-xl">&times;</button>
-      <h3 class="text-sm font-semibold text-gray-100 mb-1">Fork Existing Build</h3>
-      <p class="text-xs text-gray-500 mb-4">Search indicators and select one to copy into a new draft.</p>
+      <h3 class="text-sm font-semibold text-gray-100 mb-1">Fork Existing Signal</h3>
+      <p class="text-xs text-gray-500 mb-4">Search signals and select one to copy into a new draft.</p>
       <div class="relative mb-4">
         <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
         <input type="text" id="fork-search" placeholder="Search by name, sector, creator, or asset…"
@@ -632,7 +662,7 @@
   <script src="js/sectors.js"></script>
   <script src="js/auth.js"></script>
   <script src="js/app.js"></script>
-  <script src="js/sandbox.js?v=20260501-indicators-compact"></script>
+  <script src="js/sandbox.js?v=20260502-signals-lab"></script>
   <script src="js/api-panel.js"></script>
   <script src="js/docs.js"></script>
 

@@ -45,7 +45,7 @@ function renderDocsPage() {
     <section id="doc-overview" class="scroll-mt-20 mb-12">
       <h2 class="text-xl font-medium text-gray-100 mb-4">Overview</h2>
       <div class="bg-gray-800/40 rounded-xl p-6 border border-gray-700/40 space-y-4">
-        <p class="text-sm text-gray-300 leading-relaxed">PMSI (Polymarket Sentiment Indicators) transforms prediction market data into quantitative sentiment signals. Markets from Polymarket are classified, scored for sentiment, and aggregated into composite indicators.</p>
+        <p class="text-sm text-gray-300 leading-relaxed">Polymarket Signals Lab transforms prediction market data into quantitative and qualitative signals. Markets from Polymarket are classified, scored for sentiment, and aggregated into composite signals that can track assets, policy themes, elections, or related outcome markets.</p>
         <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
           ${[
             { name: 'Crypto', assets: 'BTC, ETH, SOL', cats: 'price_targets, regulatory, adoption, events' },

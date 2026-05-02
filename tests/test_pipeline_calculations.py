@@ -143,7 +143,7 @@ class PipelineCalculationTests(unittest.TestCase):
             def execute(self, query, params=None):
                 if "SELECT MAX(date) FROM market_snapshots" in query:
                     self.result = [("2026-05-01",)]
-                elif "SELECT market_id, sentiment_signal, weight" in query:
+                elif "SELECT market_id, sector, sentiment_signal, weight" in query:
                     snapshot_date = params[0]
                     self.result = self.rows.get(snapshot_date, [])
                 else:
@@ -166,8 +166,37 @@ class PipelineCalculationTests(unittest.TestCase):
         indicator = {"id": "stale", "markets": {"m1": {"w": 100}}, "fg_enabled": False}
         self.assertIsNone(compute_latest_score(FakeConn(stale), indicator))
 
-        current = {"2026-05-01": [("m1", 1.0, 1.0)]}
+        current = {"2026-05-01": [("m1", "crypto", 1.0, 1.0)]}
         self.assertEqual(compute_latest_score(FakeConn(current), indicator), 100.0)
+
+    def test_market_latest_score_scopes_saved_markets_to_indicator_sector(self):
+        class FakeCursor:
+            def __init__(self):
+                self.result = []
+
+            def execute(self, query, params=None):
+                if "SELECT MAX(date) FROM market_snapshots" in query:
+                    self.result = [("2026-05-01",)]
+                elif "SELECT market_id, sector, sentiment_signal, weight" in query:
+                    self.result = [
+                        ("same-id", "crypto", 1.0, 1.0),
+                        ("same-id", "economy", -1.0, 1.0),
+                    ]
+                else:
+                    self.result = []
+
+            def fetchone(self):
+                return self.result[0] if self.result else (None,)
+
+            def fetchall(self):
+                return self.result
+
+        class FakeConn:
+            def cursor(self):
+                return FakeCursor()
+
+        indicator = {"id": "btc", "sector": "crypto", "markets": {"same-id": {"w": 100}}, "fg_enabled": False}
+        self.assertEqual(compute_latest_score(FakeConn(), indicator), 100.0)
 
     def test_pipeline_run_lifecycle_records_status(self):
         with tempfile.TemporaryDirectory() as td:

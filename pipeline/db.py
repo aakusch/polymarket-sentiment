@@ -37,6 +37,7 @@ PG_SCHEMA = [
     )""",
     """CREATE TABLE IF NOT EXISTS market_snapshots (
         date TEXT NOT NULL,
+        sector TEXT NOT NULL DEFAULT 'crypto',
         market_id TEXT NOT NULL,
         event_id TEXT,
         question TEXT,
@@ -51,7 +52,7 @@ PG_SCHEMA = [
         bid_ask_imbalance DOUBLE PRECISION,
         asset TEXT DEFAULT 'OTHER',
         end_date TEXT,
-        PRIMARY KEY (date, market_id)
+        PRIMARY KEY (date, sector, market_id)
     )""",
     """CREATE TABLE IF NOT EXISTS classifications (
         market_id TEXT PRIMARY KEY,
@@ -114,6 +115,7 @@ CREATE TABLE IF NOT EXISTS sector_snapshots (
 
 CREATE TABLE IF NOT EXISTS market_snapshots (
     date TEXT NOT NULL,
+    sector TEXT NOT NULL DEFAULT 'crypto',
     market_id TEXT NOT NULL,
     event_id TEXT,
     question TEXT,
@@ -128,7 +130,7 @@ CREATE TABLE IF NOT EXISTS market_snapshots (
     bid_ask_imbalance REAL,
     asset TEXT DEFAULT 'OTHER',
     end_date TEXT,
-    PRIMARY KEY (date, market_id)
+    PRIMARY KEY (date, sector, market_id)
 );
 
 CREATE TABLE IF NOT EXISTS classifications (
@@ -269,6 +271,75 @@ class Database:
             except (sqlite3.OperationalError, Exception):
                 if self._is_pg:
                     self._conn.rollback()
+        self._ensure_market_snapshot_sector_pk()
+
+    def _ensure_market_snapshot_sector_pk(self):
+        """Keep same market IDs from different sectors from overwriting each other."""
+        if self._is_pg:
+            rows = self._conn.execute(
+                """
+                SELECT a.attname
+                FROM pg_index i
+                JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+                WHERE i.indrelid = 'market_snapshots'::regclass AND i.indisprimary
+                ORDER BY array_position(i.indkey, a.attnum)
+                """
+            ).fetchall()
+            cols = [r["attname"] for r in rows]
+            if cols == ["date", "sector", "market_id"]:
+                return
+            self._conn.execute("UPDATE market_snapshots SET sector = 'crypto' WHERE sector IS NULL")
+            constraint = self._conn.execute(
+                """
+                SELECT conname
+                FROM pg_constraint
+                WHERE conrelid = 'market_snapshots'::regclass AND contype = 'p'
+                """
+            ).fetchone()
+            if constraint:
+                self._conn.execute(f'ALTER TABLE market_snapshots DROP CONSTRAINT "{constraint["conname"]}"')
+            self._conn.execute("ALTER TABLE market_snapshots ADD PRIMARY KEY (date, sector, market_id)")
+            self._conn.commit()
+            return
+
+        info = self._conn.execute("PRAGMA table_info(market_snapshots)").fetchall()
+        pk_cols = [row["name"] for row in sorted([r for r in info if r["pk"]], key=lambda r: r["pk"])]
+        if pk_cols == ["date", "sector", "market_id"]:
+            return
+        self._conn.executescript(
+            """
+            CREATE TABLE market_snapshots_new (
+                date TEXT NOT NULL,
+                sector TEXT NOT NULL DEFAULT 'crypto',
+                market_id TEXT NOT NULL,
+                event_id TEXT,
+                question TEXT,
+                classification TEXT,
+                polarity TEXT,
+                probability REAL,
+                sentiment_signal REAL,
+                weight REAL,
+                volume_24h REAL,
+                liquidity REAL,
+                open_interest REAL,
+                bid_ask_imbalance REAL,
+                asset TEXT DEFAULT 'OTHER',
+                end_date TEXT,
+                PRIMARY KEY (date, sector, market_id)
+            );
+            INSERT OR REPLACE INTO market_snapshots_new
+                (date, sector, market_id, event_id, question, classification, polarity,
+                 probability, sentiment_signal, weight, volume_24h, liquidity,
+                 open_interest, bid_ask_imbalance, asset, end_date)
+            SELECT date, COALESCE(sector, 'crypto'), market_id, event_id, question, classification, polarity,
+                   probability, sentiment_signal, weight, volume_24h, liquidity,
+                   open_interest, bid_ask_imbalance, asset, end_date
+            FROM market_snapshots;
+            DROP TABLE market_snapshots;
+            ALTER TABLE market_snapshots_new RENAME TO market_snapshots;
+            """
+        )
+        self._conn.commit()
 
     def close(self):
         if self._conn:
@@ -320,7 +391,7 @@ class Database:
                  probability, sentiment_signal, weight, volume_24h, liquidity,
                  open_interest, bid_ask_imbalance, asset, end_date, sector)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (date, market_id) DO UPDATE SET
+                ON CONFLICT (date, sector, market_id) DO UPDATE SET
                     event_id = EXCLUDED.event_id,
                     question = EXCLUDED.question,
                     classification = EXCLUDED.classification,

@@ -89,6 +89,12 @@ def _has_explicit_sector(markets: dict) -> bool:
     return any(isinstance(v, Mapping) and v.get("sector") for v in markets.values())
 
 
+def _market_sector(indicator: dict, value) -> str:
+    if isinstance(value, Mapping) and value.get("sector"):
+        return str(value.get("sector"))
+    return str(indicator.get("sector") or "crypto")
+
+
 def _fear_greed_for_date(conn, snapshot_date: str) -> float | None:
     cur = conn.cursor()
     cur.execute("SELECT fear_greed FROM reference_prices WHERE date = %s", (snapshot_date,))
@@ -146,45 +152,36 @@ def _compute_market_latest_score(conn, indicator: dict, markets: dict) -> float 
 
     cur = conn.cursor()
     placeholders = ",".join(["%s"] * len(market_ids))
-    cross_sector = _has_explicit_sector(markets)
+    sectors = sorted({_market_sector(indicator, cfg) for cfg in markets.values()})
+    sector_placeholders = ",".join(["%s"] * len(sectors))
 
     # Use the pipeline's current snapshot date, not the selected markets' most
     # recent historical date. Otherwise expired/stale market selections can keep
     # a leaderboard score forever.
-    if cross_sector:
-        sectors = sorted({str(v.get("sector")) for v in markets.values() if isinstance(v, Mapping) and v.get("sector")})
-        sector_placeholders = ",".join(["%s"] * len(sectors))
-        cur.execute(f"SELECT MAX(date) FROM market_snapshots WHERE sector IN ({sector_placeholders})", sectors)
-        latest_date = cur.fetchone()[0]
-        if not latest_date:
-            return None
-        cur.execute(
-            f"""
-            SELECT market_id, sentiment_signal, weight
-            FROM market_snapshots
-            WHERE date = %s AND market_id IN ({placeholders})
-            """,
-            [latest_date] + market_ids,
-        )
-    else:
-        cur.execute("SELECT MAX(date) FROM market_snapshots")
-        latest_date = cur.fetchone()[0]
-        if not latest_date:
-            return None
-        cur.execute(
-            f"""
-            SELECT market_id, sentiment_signal, weight
-            FROM market_snapshots
-            WHERE date = %s AND market_id IN ({placeholders})
-            """,
-            [latest_date] + market_ids,
-        )
+    cur.execute(f"SELECT MAX(date) FROM market_snapshots WHERE sector IN ({sector_placeholders})", sectors)
+    latest_date = cur.fetchone()[0]
+    if not latest_date:
+        return None
+    cur.execute(
+        f"""
+        SELECT market_id, sector, sentiment_signal, weight
+        FROM market_snapshots
+        WHERE date = %s
+          AND market_id IN ({placeholders})
+          AND sector IN ({sector_placeholders})
+        """,
+        [latest_date] + market_ids + sectors,
+    )
 
-    market_rows = {r[0]: (float(r[1]), float(r[2])) for r in cur.fetchall() if r[1] is not None and r[2] is not None}
+    market_rows = {}
+    for r in cur.fetchall():
+        if r[2] is None or r[3] is None:
+            continue
+        market_rows[(r[0], r[1])] = (float(r[2]), float(r[3]))
     num = 0.0
     den = 0.0
     for mid, cfg in markets.items():
-        row = market_rows.get(mid)
+        row = market_rows.get((mid, _market_sector(indicator, cfg)))
         if not row:
             continue
         signal, base_weight = row
