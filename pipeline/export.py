@@ -48,6 +48,7 @@ SUB_CATEGORY_MAP = {
     "legislative_negative": "legislative",
     "judicial_event": "judicial",
     "geopolitical_event": "geopolitical",
+    "geopolitical_deescalation": "geopolitical",
 }
 
 SECTOR_CATEGORIES = {
@@ -102,7 +103,9 @@ def _compute_sub_scores(markets: list[dict], sector: str) -> dict[str, dict]:
                 "market_count": len(ms),
             }
         else:
-            sub[cat] = {"score": 0.0, "normalized": 50.0, "market_count": 0}
+            # No coverage is not a neutral reading. Emitting 50.0 here made an
+            # empty category indistinguishable from a measured dead-centre one.
+            sub[cat] = {"score": None, "normalized": None, "market_count": 0}
     return sub
 
 
@@ -130,14 +133,25 @@ def _format_stored_sub_scores(sector_row: dict, markets: list[dict], sector: str
     counts = _sub_score_counts(markets)
     sub: dict[str, dict] = {}
     for cat in [c for c in SECTOR_CATEGORIES.get(sector, []) if c != "other"]:
+        count = counts.get(cat, 0)
         try:
             score = float(raw.get(cat, 0.0) or 0.0)
         except (TypeError, ValueError):
             score = 0.0
+        if count == 0:
+            # The stored score is computed over the whole snapshot while the count
+            # comes from the exported markets; when they disagree the published
+            # figure was a score attributed to no visible markets (regulatory read
+            # 54.9 over 0 markets). Publish the absence instead.
+            if score:
+                log.warning("Sub-score %s/%s has score %.4f but 0 markets — publishing null",
+                            sector, cat, score)
+            sub[cat] = {"score": None, "normalized": None, "market_count": 0}
+            continue
         sub[cat] = {
             "score": round(score, 4),
             "normalized": round((score + 1) * 50, 1),
-            "market_count": counts.get(cat, 0),
+            "market_count": count,
         }
     return sub
 
@@ -241,7 +255,7 @@ def _build_category_case_sql() -> str:
             WHEN classification = 'favors_challenger' THEN 'favors_challenger'
             WHEN classification IN ('legislative_positive','legislative_negative') THEN 'legislative'
             WHEN classification = 'judicial_event' THEN 'judicial'
-            WHEN classification = 'geopolitical_event' THEN 'geopolitical'
+            WHEN classification IN ('geopolitical_event', 'geopolitical_deescalation') THEN 'geopolitical'
             ELSE 'other'
         END
     """

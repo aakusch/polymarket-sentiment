@@ -43,31 +43,86 @@ function pricesFromReturns(returns) {
   return prices;
 }
 
-test('predictive score uses forward returns and does not reward inverse correlation', () => {
-  const scores = Array.from({ length: 40 }, (_, i) => 90 - i);
-  const returns = scores.slice(0, -1).map(score => -(score - 70) / 1000);
-  const prices = pricesFromReturns(returns);
+// Deterministic pseudo-random deltas. A linear score ramp is degenerate under
+// differencing (constant delta => zero variance => undefined correlation), so
+// fixtures need genuinely varying score changes.
+function seededDeltas(n, seed = 17) {
+  const out = [];
+  let x = seed;
+  for (let i = 0; i < n; i++) {
+    x = (x * 1103515245 + 12345) % 2147483648;
+    out.push((x / 2147483648) - 0.5);
+  }
+  return out;
+}
+
+// Builds a price path where the forward `lag`-period return is driven by the
+// score change `lag` steps earlier, with `sign` setting the direction.
+function seriesWithLeadRelationship(n, lag, sign) {
+  const deltas = seededDeltas(n);
+  const scores = [50];
+  for (let i = 1; i < n; i++) scores.push(scores[i - 1] + deltas[i] * 5);
+  const prices = new Array(n);
+  for (let i = 0; i < lag; i++) prices[i] = 100;
+  for (let i = lag; i < n; i++) {
+    const ds = scores[i - lag] - scores[i - lag - 1] || 0;
+    prices[i] = prices[i - lag] * (1 + sign * 0.02 * ds);
+  }
+  return { scores, prices };
+}
+
+test('predictive score reports inverse correlation as negative rather than clamping it to zero', () => {
+  const { scores, prices } = seriesWithLeadRelationship(160, 7, -1);
 
   const apiResult = computePredictiveScore(scores, prices);
   const browserResult = sandbox.computePredictiveScore(scores, prices);
 
-  assert.equal(apiResult.score, 0);
-  assert.ok(apiResult.peakCorrelation < 0);
+  // The old implementation did Math.max(0, r), so a perfectly inverted
+  // indicator scored 0 — indistinguishable from one with no signal at all.
+  assert.ok(apiResult.score < 0, `expected negative score, got ${apiResult.score}`);
+  assert.ok(apiResult.ic < 0);
+  assert.equal(apiResult.significant, true);
   assert.equal(browserResult.score, apiResult.score);
-  assert.equal(browserResult.peakCorrelation, apiResult.peakCorrelation);
-  assert.equal(browserResult.optimalLag, apiResult.optimalLag);
+  assert.equal(browserResult.ic, apiResult.ic);
+  assert.equal(browserResult.lag, apiResult.lag);
 });
 
-test('predictive score rewards positive signed correlation to future returns', () => {
-  const scores = Array.from({ length: 40 }, (_, i) => 50 + i);
-  const returns = scores.slice(0, -1).map(score => (score - 70) / 1000);
-  const prices = pricesFromReturns(returns);
+test('predictive score reports a genuine positive lead relationship', () => {
+  const { scores, prices } = seriesWithLeadRelationship(160, 7, 1);
 
   const result = computePredictiveScore(scores, prices);
 
-  assert.ok(result.score > 60);
-  assert.ok(result.peakCorrelation > 0);
-  assert.equal(result.optimalLag, 1);
+  assert.ok(result.ic > 0.5, `expected strong positive ic, got ${result.ic}`);
+  assert.equal(result.significant, true);
+  assert.equal(result.lag, 7);
+  assert.equal(result.score, Math.round(result.ic * 100));
+});
+
+test('predictive score does not manufacture signal from noise', () => {
+  // Independent score and price series: the honest answer is "no measurable
+  // power". The old max-over-8-lags-then-clamp made this strictly positive.
+  const deltas = seededDeltas(300, 5);
+  const other = seededDeltas(300, 99);
+  const scores = [50];
+  for (let i = 1; i < 300; i++) scores.push(scores[i - 1] + deltas[i] * 5);
+  const prices = [100];
+  for (let i = 1; i < 300; i++) prices.push(prices[i - 1] * (1 + other[i] * 0.02));
+
+  const result = computePredictiveScore(scores, prices);
+
+  assert.equal(result.significant, false);
+  assert.ok(Math.abs(result.ic) < 0.2, `expected near-zero ic, got ${result.ic}`);
+});
+
+test('predictive score labels its best lag as in-sample', () => {
+  const { scores, prices } = seriesWithLeadRelationship(160, 7, 1);
+  const result = computePredictiveScore(scores, prices);
+
+  // Picking the max over 8 lags is data mining; the headline must not be it.
+  assert.equal(result.inSampleBest.inSample, true);
+  assert.equal(result.lag, 7);
+  assert.ok(Array.isArray(result.byLag) && result.byLag.length > 1);
+  assert.ok(result.byLag.every(l => typeof l.tStat === 'number' && l.nEff <= l.n));
 });
 
 test('reference asset resolver preserves explicit and sector-level nulls', () => {

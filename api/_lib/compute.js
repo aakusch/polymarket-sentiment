@@ -266,55 +266,97 @@ async function computeIndicator(indicator) {
 }
 
 /**
- * Compute Predictive Score: how well indicator scores lead future reference returns.
- * Cross-correlates against forward returns at multiple lags and only rewards
- * positive signed correlation, returning { score, peakCorrelation, optimalLag }.
+ * Correlation of indicator scores against forward reference returns.
+ *
+ * Reports a SIGNED information coefficient at a fixed primary lag. The previous
+ * version scanned 8 lags, kept the maximum, and clamped negatives to zero with
+ * `Math.max(0, r)` — so it could never report "no predictive power" or "inverted",
+ * and a pure-noise indicator scored strictly positive by construction.
+ *
+ * Two corrections beyond removing the clamp:
+ *  - The headline uses PRIMARY_LAG, not the best of eight. Every lag is still
+ *    reported, and the best one is labelled in-sample so it cannot be mistaken
+ *    for an out-of-sample result.
+ *  - Daily windows at lag k overlap, so the effective sample is ~n/k, not n. The
+ *    t-stat uses the deflated count; significance is |t| >= 2.
  */
-function computePredictiveScore(scores, prices) {
-  const lags = [1, 2, 3, 5, 7, 14, 21, 30];
-  let bestPositive = null;
-  let strongestInverse = null;
+const PREDICTIVE_LAGS = [1, 2, 3, 5, 7, 14, 21, 30];
+const PRIMARY_LAG = 7;
+const MIN_PAIRS = 20;
 
-  for (const lag of lags) {
-    const pairs = [];
-    for (let i = 0; i < scores.length - lag; i++) {
-      if (scores[i] != null && prices[i] != null && prices[i + lag] != null && prices[i] > 0) {
-        pairs.push([scores[i], prices[i + lag] / prices[i] - 1]);
-      }
-    }
-    if (pairs.length < 10) continue;
-
-    const n = pairs.length;
-    const mx = pairs.reduce((s, p) => s + p[0], 0) / n;
-    const my = pairs.reduce((s, p) => s + p[1], 0) / n;
-    let num = 0, dx2 = 0, dy2 = 0;
-    for (const [x, y] of pairs) {
-      const dx = x - mx, dy = y - my;
-      num += dx * dy;
-      dx2 += dx * dx;
-      dy2 += dy * dy;
-    }
-    const den = Math.sqrt(dx2 * dy2);
-    const r = den > 0 ? num / den : 0;
-
-    if (r > 0 && (!bestPositive || r > bestPositive.r)) {
-      bestPositive = { r, lag };
-    }
-    if (r < 0 && (!strongestInverse || Math.abs(r) > Math.abs(strongestInverse.r))) {
-      strongestInverse = { r, lag };
-    }
+function pearson(pairs) {
+  const n = pairs.length;
+  if (n < 3) return 0;
+  const mx = pairs.reduce((s, p) => s + p[0], 0) / n;
+  const my = pairs.reduce((s, p) => s + p[1], 0) / n;
+  let num = 0, dx2 = 0, dy2 = 0;
+  for (const [x, y] of pairs) {
+    const dx = x - mx, dy = y - my;
+    num += dx * dy;
+    dx2 += dx * dx;
+    dy2 += dy * dy;
   }
+  const den = Math.sqrt(dx2 * dy2);
+  return den > 0 ? num / den : 0;
+}
 
-  const selected = bestPositive || strongestInverse;
-  if (!selected) return null;
+/**
+ * Pairs the CHANGE in score against the forward return. Score levels are
+ * strongly autocorrelated, so correlating levels against returns overstates r;
+ * differencing is the standard treatment.
+ */
+function lagPairs(scores, prices, lag) {
+  const pairs = [];
+  for (let i = 1; i < scores.length - lag; i++) {
+    const s0 = scores[i], sPrev = scores[i - 1];
+    const p0 = prices[i], pF = prices[i + lag];
+    if (s0 == null || sPrev == null || p0 == null || pF == null || p0 <= 0) continue;
+    pairs.push([s0 - sPrev, pF / p0 - 1]);
+  }
+  return pairs;
+}
 
-  const positiveR = Math.max(0, selected.r);
-  const lagMultiplier = 0.7 + (1 - selected.lag / 30) * 0.3;
-  const score = Math.round(positiveR * 100 * lagMultiplier);
+function computePredictiveScore(scores, prices) {
+  const byLag = [];
+  for (const lag of PREDICTIVE_LAGS) {
+    const pairs = lagPairs(scores, prices, lag);
+    if (pairs.length < MIN_PAIRS) continue;
+    const ic = pearson(pairs);
+    // Overlapping windows: deflate the sample before testing significance.
+    const nEff = Math.max(3, Math.floor(pairs.length / lag));
+    const denom = Math.max(1e-9, 1 - ic * ic);
+    const tStat = ic * Math.sqrt((nEff - 2) / denom);
+    byLag.push({
+      lag,
+      ic: Math.round(ic * 1000) / 1000,
+      n: pairs.length,
+      nEff,
+      tStat: Math.round(tStat * 100) / 100,
+      significant: Math.abs(tStat) >= 2,
+    });
+  }
+  if (byLag.length === 0) return null;
+
+  const primary = byLag.find(l => l.lag === PRIMARY_LAG) || byLag[0];
+  const inSampleBest = byLag.reduce((a, b) => (Math.abs(b.ic) > Math.abs(a.ic) ? b : a));
+
   return {
-    score: Math.max(0, Math.min(100, score)),
-    peakCorrelation: Math.round(selected.r * 1000) / 1000,
-    optimalLag: selected.lag,
+    // Signed, -100..100. Negative means the indicator has led the asset the
+    // wrong way, which is a real finding and is reported as one.
+    score: Math.round(primary.ic * 100),
+    ic: primary.ic,
+    n: primary.n,
+    nEff: primary.nEff,
+    tStat: primary.tStat,
+    significant: primary.significant,
+    lag: primary.lag,
+    method: 'signed IC, delta-score vs forward return, overlap-adjusted t',
+    byLag,
+    // Labelled so it reads as what it is: the best of several tries on one sample.
+    inSampleBest: { lag: inSampleBest.lag, ic: inSampleBest.ic, inSample: true },
+    // Back-compat with the documented v1/v2 response shape.
+    peakCorrelation: primary.ic,
+    optimalLag: primary.lag,
   };
 }
 

@@ -487,6 +487,11 @@ class Database:
                     "composite": score.composite,
                     "composite_normalized": score.composite_normalized,
                     "market_count": score.market_count,
+                    # Coverage rides with the score: a composite over 12% of the
+                    # observed markets is a different claim than one over 90%.
+                    "scored_market_count": score.scored_market_count,
+                    "classified_pct": score.classified_pct,
+                    "coverage_ok": score.coverage_ok,
                     "sub_scores": score.sub_scores,
                 }),
             ),
