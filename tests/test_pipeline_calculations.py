@@ -1,12 +1,13 @@
 import json
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
+import export as export_module
 from db import Database
-from export import _write_json, build_export_meta, export_latest
+from export import OUTPUT_DIR, _write_json, build_export_meta, export_latest, export_sandbox
 from indicator_scores import compute_latest_score, update_latest_scores
 from scoring_contract import SCORING_VERSION
 from scorer import MarketScore, _event_deduped_composite, sector_score_from_market_scores
@@ -245,6 +246,111 @@ class PipelineCalculationTests(unittest.TestCase):
             data = json.loads(out.read_text())
 
         self.assertEqual(data["started_at"], "2026-05-01T12:00:00+00:00")
+
+
+class ExportTargetTests(unittest.TestCase):
+    """The default export target is the directory the site actually serves.
+
+    Regression guard: OUTPUT_DIR pointed at pipeline/dashboard/data/ while the site
+    served public/ and CI validated + committed public/data/, so every scheduled
+    export wrote where nothing read and the published JSON froze for months.
+    """
+
+    def test_output_dir_is_repo_public_data(self):
+        repo_root = Path(export_module.__file__).resolve().parent.parent
+        self.assertEqual(OUTPUT_DIR, repo_root / "public" / "data")
+
+    def test_output_dir_is_absolute_and_cwd_independent(self):
+        # CI runs `cd pipeline && python3 export.py`, so a cwd-relative path would
+        # silently retarget the export.
+        self.assertTrue(OUTPUT_DIR.is_absolute())
+
+
+class SandboxBoundsTests(unittest.TestCase):
+    """Both sandbox bounds hold: the rolling window and the per-asset market cap.
+
+    Uncapped, this export reached ~150 MB for a single sector — over GitHub's
+    100 MB file limit and unusable as a browser fetch.
+    """
+
+    COLUMNS = (
+        "date, sector, market_id, event_id, question, classification, polarity, "
+        "probability, sentiment_signal, weight, volume_24h, liquidity, "
+        "open_interest, bid_ask_imbalance, asset, end_date"
+    )
+
+    def _seed(self, db, dates, markets, asset="BTC", sector="crypto"):
+        conn = db.connect()
+        for d in dates:
+            for mid, vol in markets:
+                conn.execute(
+                    f"INSERT OR REPLACE INTO market_snapshots ({self.COLUMNS}) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (d, sector, mid, f"event-{mid}", f"question {mid}", "price_above",
+                     "bullish", 0.5, 1.0, 1.0, vol, 100, 100, 0, asset, None),
+                )
+        conn.commit()
+
+    def test_market_cap_keeps_highest_volume_and_reports_the_tail(self):
+        dates = [(datetime.now(timezone.utc).date() - timedelta(days=i)).isoformat()
+                 for i in range(6)]
+        markets = [(f"m{i}", float(i)) for i in range(10)]  # m9 carries the most volume
+
+        with tempfile.TemporaryDirectory() as td:
+            with Database(Path(td) / "test.db") as db:
+                self._seed(db, dates, markets)
+                data = export_sandbox(db, sector="crypto", max_markets_per_asset=3)
+
+        kept = data["assets"]["BTC"]["markets"]
+        self.assertEqual(sorted(kept), ["m7", "m8", "m9"])
+        self.assertEqual(data["bounds"]["dropped_markets"], {"BTC": 7})
+        self.assertEqual(data["bounds"]["max_markets_per_asset"], 3)
+
+    def test_window_excludes_snapshots_older_than_the_cutoff(self):
+        today = datetime.now(timezone.utc).date()
+        recent = [(today - timedelta(days=i)).isoformat() for i in range(6)]
+        ancient = [(today - timedelta(days=400 + i)).isoformat() for i in range(6)]
+
+        with tempfile.TemporaryDirectory() as td:
+            with Database(Path(td) / "test.db") as db:
+                self._seed(db, recent + ancient, [("m1", 100.0)])
+                data = export_sandbox(db, sector="crypto", window_days=180)
+
+        dates = data["assets"]["BTC"]["dates"]
+        self.assertEqual(sorted(dates), sorted(recent))
+        self.assertNotIn(ancient[0], dates)
+        self.assertEqual(data["bounds"]["window_days"], 180)
+
+    def test_zero_bounds_disable_both_limits(self):
+        today = datetime.now(timezone.utc).date()
+        dates = [(today - timedelta(days=i)).isoformat() for i in range(6)]
+        old = [(today - timedelta(days=400)).isoformat()]
+
+        with tempfile.TemporaryDirectory() as td:
+            with Database(Path(td) / "test.db") as db:
+                self._seed(db, dates + old, [(f"m{i}", float(i)) for i in range(10)])
+                data = export_sandbox(db, sector="crypto", window_days=0,
+                                      max_markets_per_asset=0)
+
+        self.assertEqual(len(data["assets"]["BTC"]["markets"]), 10)
+        self.assertIn(old[0], data["assets"]["BTC"]["dates"])
+        self.assertEqual(data["bounds"]["dropped_markets"], {})
+
+    def test_assets_below_the_date_floor_are_excluded(self):
+        # A one-snapshot asset is a flat line the sandbox will happily correlate
+        # against anything; non-crypto sectors used to publish these.
+        today = datetime.now(timezone.utc).date()
+        with tempfile.TemporaryDirectory() as td:
+            with Database(Path(td) / "test.db") as db:
+                self._seed(db, [(today - timedelta(days=i)).isoformat() for i in range(6)],
+                           [("m1", 100.0)], asset="SPY", sector="stocks")
+                self._seed(db, [today.isoformat()], [("m2", 100.0)],
+                           asset="QQQ", sector="stocks")
+                data = export_sandbox(db, sector="stocks")
+
+        self.assertIn("SPY", data["assets"])
+        self.assertNotIn("QQQ", data["assets"])
+        self.assertEqual(data["bounds"]["min_dates"], 5)
 
 
 if __name__ == "__main__":

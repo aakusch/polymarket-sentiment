@@ -12,12 +12,15 @@ from datetime import datetime, timezone
 import httpx
 
 from config import (
+    EXCLUDED_TAG_LABELS,
     GAMMA_EVENTS,
     GAMMA_SEARCH,
     GAMMA_REQ_PER_SEC,
     NOISE_MAX_DURATION_HOURS,
     NOISE_TITLE_PATTERN,
     REQUEST_TIMEOUT,
+    SECTOR_QUESTION_PATTERNS,
+    SECTOR_TAG_LABELS,
     SECTORS,
 )
 
@@ -157,10 +160,44 @@ def _is_noise_event(event: Event) -> bool:
     return False
 
 
+_SECTOR_QUESTION_RE: dict[str, list[re.Pattern]] = {
+    sector: [re.compile(p, re.IGNORECASE) for p in patterns]
+    for sector, patterns in SECTOR_QUESTION_PATTERNS.items()
+}
+
+
+def event_matches_sector(event: Event, sector: str) -> bool:
+    """Does this event belong to `sector`?
+
+    Tags first — Polymarket tags them well and the bulk volume feed is dominated
+    by sports and esports, which have no business weighting a macro indicator no
+    matter what words their questions contain. Untagged events fall back to
+    word-boundary patterns over the title and market questions.
+    """
+    labels = {
+        str(t.get("label", "")).strip().lower()
+        for t in (event.tags or [])
+        if isinstance(t, dict)
+    }
+    if labels & EXCLUDED_TAG_LABELS:
+        return False
+    if labels & SECTOR_TAG_LABELS.get(sector, set()):
+        return True
+    # A tagged event that matched no sector label is a deliberate exclusion:
+    # its tags said what it is, and it is not this.
+    if labels:
+        return False
+
+    patterns = _SECTOR_QUESTION_RE.get(sector, [])
+    haystack = " ".join([event.title] + [m.question for m in event.markets])
+    return any(p.search(haystack) for p in patterns)
+
+
 class Discoverer:
     """Discovers crypto markets via the Gamma API."""
 
     def __init__(self, sector: str = "crypto"):
+        self.sector = sector
         self.sector_cfg = SECTORS[sector]
         self._semaphore = asyncio.Semaphore(GAMMA_REQ_PER_SEC)
 
@@ -232,16 +269,25 @@ class Discoverer:
         return all_events
 
     async def discover(self, *, active_only: bool = True) -> list[Event]:
-        """Run all discovery strategies and return deduplicated events."""
+        """Run all discovery strategies and return deduplicated events.
+
+        Membership is a positive decision. The bulk fetch is a *candidate* pool —
+        every active event by volume, which in practice is mostly sports and
+        esports — so a bulk-only event has to match this sector to be kept.
+        Events that arrived via this sector's own search terms or tag IDs are
+        already sector-targeted and are kept as they are.
+        """
         events_by_id: dict[str, dict] = {}
+        bulk_only: set[str] = set()
 
         async with httpx.AsyncClient() as client:
-            # Primary: bulk fetch ALL active events by volume
+            # Candidate pool: all active events by volume. Filtered below.
             bulk_events = await self._fetch_all_active(client)
             for raw_event in bulk_events:
                 eid = str(raw_event.get("id", ""))
                 if eid:
                     events_by_id[eid] = raw_event
+                    bulk_only.add(eid)
 
             # Supplementary: search-based discovery for niche terms
             search_tasks = [
@@ -256,8 +302,10 @@ class Discoverer:
                     continue
                 for raw_event in result:
                     eid = str(raw_event.get("id", ""))
-                    if eid and eid not in events_by_id:
-                        events_by_id[eid] = raw_event
+                    if not eid:
+                        continue
+                    events_by_id.setdefault(eid, raw_event)
+                    bulk_only.discard(eid)  # matched this sector's search terms
 
             # Supplementary: tag-based discovery
             tag_tasks = [
@@ -272,11 +320,26 @@ class Discoverer:
                     continue
                 for raw_event in result:
                     eid = str(raw_event.get("id", ""))
-                    if eid and eid not in events_by_id:
-                        events_by_id[eid] = raw_event
+                    if not eid:
+                        continue
+                    events_by_id.setdefault(eid, raw_event)
+                    bulk_only.discard(eid)  # carries this sector's tag ID
 
         # Parse into structured objects
         events = [Event.from_raw(raw) for raw in events_by_id.values()]
+
+        # Sector membership: candidates from the bulk pool must match.
+        pre_membership = len(events)
+        events = [
+            e for e in events
+            if e.id not in bulk_only or event_matches_sector(e, self.sector)
+        ]
+        dropped = pre_membership - len(events)
+        if dropped:
+            log.info(
+                "Sector membership[%s]: dropped %d of %d bulk candidates, %d events kept",
+                self.sector, dropped, pre_membership, len(events),
+            )
 
         if active_only:
             events = [e for e in events if e.active]

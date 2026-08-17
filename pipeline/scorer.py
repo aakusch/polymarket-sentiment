@@ -14,6 +14,8 @@ from classifier import Classification
 from collector import OrderBookSnapshot
 from config import (
     MAX_LIQUIDITY,
+    MIN_CLASSIFIED_PCT,
+    MIN_SCORED_MARKETS,
     MAX_OI,
     MAX_VOLUME,
     NOISE_QUESTION_PATTERNS,
@@ -63,6 +65,9 @@ class SectorScore:
     volume_concentration: float    # Herfindahl index
     sub_scores: dict[str, float] = field(default_factory=dict)
     market_scores: list[MarketScore] = field(default_factory=list)
+    scored_market_count: int = 0   # markets that actually moved the composite
+    classified_pct: float = 0.0    # % of observed markets carrying a direction
+    coverage_ok: bool = True       # False → too thin to present as a reading
 
 
 _noise_q_re = [re.compile(p) for p in NOISE_QUESTION_PATTERNS]
@@ -90,7 +95,7 @@ SUB_CATEGORY_TYPES = {
         "favors_challenger": ["favors_challenger"],
         "legislative": ["legislative_positive", "legislative_negative"],
         "judicial": ["judicial_event"],
-        "geopolitical": ["geopolitical_event"],
+        "geopolitical": ["geopolitical_event", "geopolitical_deescalation"],
     },
 }
 
@@ -213,20 +218,41 @@ def _event_deduped_composite(scores: list[MarketScore]) -> float:
     return weighted_sum / total_weight if total_weight > 0 else 0.0
 
 
+def _is_directional(ms: MarketScore) -> bool:
+    """True when a market carries a direction and belongs in a directional composite.
+
+    Unclassified markets used to sit in the denominator with signal 0, so the
+    composite was a real signal from a few dozen markets divided by the weight of
+    a thousand-plus that said nothing. That dragged every sector to the midpoint —
+    crypto 47.3, economy 47.5, stocks 47.6, politics 47.8, four "independent"
+    indicators agreeing to within half a point. price_range markets are neutral by
+    construction and belong in coverage, not in a directional average either.
+    """
+    return ms.classification not in ("unclassified", "price_range")
+
+
 def sector_score_from_market_scores(market_scores: list[MarketScore], sector: str = "crypto") -> SectorScore:
-    """Build a SectorScore from pre-scored markets using canonical aggregation."""
-    composite = _event_deduped_composite(market_scores)
+    """Build a SectorScore from pre-scored markets using canonical aggregation.
+
+    `market_count` stays the full observed set — it describes coverage — while the
+    composite is computed only over directional markets, and `classified_pct`
+    reports the gap between the two instead of hiding it in the denominator.
+    """
+    directional = [ms for ms in market_scores if _is_directional(ms)]
+
+    composite = _event_deduped_composite(directional)
     composite = max(-1.0, min(1.0, composite))
 
     sub_categories = SUB_CATEGORY_TYPES.get(sector, SUB_CATEGORY_TYPES["crypto"])
     sub_scores: dict[str, float] = {}
     for cat_name, types in sub_categories.items():
-        cat_markets = [ms for ms in market_scores if ms.classification in types]
+        cat_markets = [ms for ms in directional if ms.classification in types]
         sub_scores[cat_name] = _event_deduped_composite(cat_markets) if cat_markets else 0.0
 
     volumes = [ms.volume_24h for ms in market_scores if ms.volume_24h > 0]
     liquidities = [ms.liquidity for ms in market_scores if ms.liquidity > 0]
-    bullish_count = sum(1 for ms in market_scores if ms.sentiment_signal > 0.1)
+    bullish_count = sum(1 for ms in directional if ms.sentiment_signal > 0.1)
+    classified_pct = (len(directional) / len(market_scores) * 100) if market_scores else 0.0
 
     return SectorScore(
         composite=composite,
@@ -235,10 +261,16 @@ def sector_score_from_market_scores(market_scores: list[MarketScore], sector: st
         total_volume_24h=sum(ms.volume_24h for ms in market_scores),
         total_open_interest=sum(ms.open_interest for ms in market_scores),
         avg_liquidity=mean(liquidities) if liquidities else 0.0,
-        bullish_pct=(bullish_count / len(market_scores) * 100) if market_scores else 0.0,
+        bullish_pct=(bullish_count / len(directional) * 100) if directional else 0.0,
         volume_concentration=_herfindahl(volumes),
         sub_scores=sub_scores,
         market_scores=market_scores,
+        scored_market_count=len(directional),
+        classified_pct=classified_pct,
+        coverage_ok=(
+            len(directional) >= MIN_SCORED_MARKETS
+            and classified_pct >= MIN_CLASSIFIED_PCT
+        ),
     )
 
 

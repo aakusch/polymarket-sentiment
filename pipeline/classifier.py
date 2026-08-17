@@ -5,8 +5,9 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 
-from config import ASSET_PATTERNS, STOCK_ASSET_PATTERNS, KEYWORD_RULES
+from config import ASSET_PATTERNS, STOCK_ASSET_PATTERNS, SECTOR_RULES
 from discovery import Market
 
 log = logging.getLogger(__name__)
@@ -56,16 +57,64 @@ class Classification:
 MANUAL_OVERRIDES: dict[str, tuple[str, str]] = {}
 
 
-def classify_by_keywords(question: str) -> tuple[str, str] | None:
-    """Try to classify a market question using keyword rules.
+_KEYWORD_GAP_WORDS = 2
 
-    Returns (signal_type, polarity) or None if no rule matches.
+
+def _keyword_pattern(keyword: str) -> str:
+    """Word-boundary pattern for a keyword, tolerating a little filler.
+
+    Real questions rarely contain the bare phrase: the rule says "inflation
+    above" but the market asks "Will CPI inflation be above 3%?". Allow up to
+    _KEYWORD_GAP_WORDS words between the terms so phrase rules actually fire,
+    while still requiring every term, in order, on word boundaries.
+    """
+    terms = [re.escape(t) for t in keyword.split()]
+    gap = rf"(?:\W+\w+){{0,{_KEYWORD_GAP_WORDS}}}\W+"
+    return r"\b" + gap.join(terms) + r"\b"
+
+
+@lru_cache(maxsize=None)
+def _compiled_rules(sector: str) -> tuple[tuple[re.Pattern, int, str, str], ...]:
+    """Compile a sector's rules to word-boundary regexes, longest keyword first.
+
+    Word boundaries matter more than they look. The old matcher used plain
+    substring containment, so "g(over)nment shutdown" and "W(hit)e House" both
+    matched the bullish price-target rule, and "JPMorgan (ban)k" matched
+    regulatory_negative.
+    """
+    rules = SECTOR_RULES.get(sector, SECTOR_RULES["crypto"])
+    compiled: list[tuple[re.Pattern, int, str, str]] = []
+    for keywords, signal_type, polarity in rules:
+        for kw in keywords:
+            compiled.append((
+                re.compile(_keyword_pattern(kw)), len(kw), signal_type, polarity,
+            ))
+    # Longest keyword first, so specificity — not list order — picks the winner.
+    compiled.sort(key=lambda r: r[1], reverse=True)
+    return tuple(compiled)
+
+
+def classify_by_keywords(question: str, sector: str = "crypto") -> tuple[str, str] | None:
+    """Classify a market question using that sector's keyword rules.
+
+    The most specific match wins ("inflation above" beats "above"), and a tie
+    between two different signal types at equal specificity is ambiguous rather
+    than silently resolved by list order. Returns (signal_type, polarity), or
+    None when nothing matches or the match is ambiguous.
     """
     q_lower = question.lower()
-    for keywords, signal_type, polarity in KEYWORD_RULES:
-        for kw in keywords:
-            if kw in q_lower:
-                return signal_type, polarity
+    best_len = 0
+    winners: set[tuple[str, str]] = set()
+    for pattern, kw_len, signal_type, polarity in _compiled_rules(sector):
+        if kw_len < best_len:
+            break  # sorted by length — nothing further can beat the current best
+        if pattern.search(q_lower):
+            best_len = kw_len
+            winners.add((signal_type, polarity))
+    if len(winners) == 1:
+        return next(iter(winners))
+    if len(winners) > 1:
+        log.debug("Ambiguous classification (%s): %r -> %s", sector, question, winners)
     return None
 
 
@@ -86,7 +135,7 @@ def classify_market(market: Market, sector: str = "crypto") -> Classification:
         )
 
     # Try keyword-based classification
-    result = classify_by_keywords(market.question)
+    result = classify_by_keywords(market.question, sector=sector)
     if result:
         sig_type, polarity = result
         return Classification(

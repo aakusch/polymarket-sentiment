@@ -6,7 +6,7 @@ import json
 import logging
 from collections import defaultdict
 from datetime import date
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -48,6 +48,7 @@ SUB_CATEGORY_MAP = {
     "legislative_negative": "legislative",
     "judicial_event": "judicial",
     "geopolitical_event": "geopolitical",
+    "geopolitical_deescalation": "geopolitical",
 }
 
 SECTOR_CATEGORIES = {
@@ -64,8 +65,21 @@ SECTOR_REF_KEYS = {
     "politics": [],
 }
 
-OUTPUT_DIR = Path(__file__).parent / "dashboard" / "data"
+# Why: the served site is `public/` (see vercel.json outputDirectory), and both
+# scripts/validate-data.js and the Daily Snapshot commit step read public/data/.
+# This used to point at pipeline/dashboard/data/, so every CI export since the
+# site moved to public/ wrote into a directory nobody reads — the published JSON
+# froze at 2026-05-01 while the pipeline reported success. Resolve from the repo
+# root, not the pipeline dir, and never make this relative to the process cwd
+# (CI runs export.py from inside pipeline/).
+OUTPUT_DIR = Path(__file__).resolve().parent.parent / "public" / "data"
 MAX_MARKETS = 500
+
+# Sandbox payload bounds. Per-market series are dense (one slot per asset date),
+# so an uncapped export grows with markets x dates and reached 150 MB/sector —
+# past GitHub's 100 MB file ceiling and far past a usable browser fetch.
+SANDBOX_WINDOW_DAYS = 180
+SANDBOX_MAX_MARKETS_PER_ASSET = 250
 
 
 def _compute_sub_scores(markets: list[dict], sector: str) -> dict[str, dict]:
@@ -89,7 +103,9 @@ def _compute_sub_scores(markets: list[dict], sector: str) -> dict[str, dict]:
                 "market_count": len(ms),
             }
         else:
-            sub[cat] = {"score": 0.0, "normalized": 50.0, "market_count": 0}
+            # No coverage is not a neutral reading. Emitting 50.0 here made an
+            # empty category indistinguishable from a measured dead-centre one.
+            sub[cat] = {"score": None, "normalized": None, "market_count": 0}
     return sub
 
 
@@ -117,14 +133,25 @@ def _format_stored_sub_scores(sector_row: dict, markets: list[dict], sector: str
     counts = _sub_score_counts(markets)
     sub: dict[str, dict] = {}
     for cat in [c for c in SECTOR_CATEGORIES.get(sector, []) if c != "other"]:
+        count = counts.get(cat, 0)
         try:
             score = float(raw.get(cat, 0.0) or 0.0)
         except (TypeError, ValueError):
             score = 0.0
+        if count == 0:
+            # The stored score is computed over the whole snapshot while the count
+            # comes from the exported markets; when they disagree the published
+            # figure was a score attributed to no visible markets (regulatory read
+            # 54.9 over 0 markets). Publish the absence instead.
+            if score:
+                log.warning("Sub-score %s/%s has score %.4f but 0 markets — publishing null",
+                            sector, cat, score)
+            sub[cat] = {"score": None, "normalized": None, "market_count": 0}
+            continue
         sub[cat] = {
             "score": round(score, 4),
             "normalized": round((score + 1) * 50, 1),
-            "market_count": counts.get(cat, 0),
+            "market_count": count,
         }
     return sub
 
@@ -228,14 +255,26 @@ def _build_category_case_sql() -> str:
             WHEN classification = 'favors_challenger' THEN 'favors_challenger'
             WHEN classification IN ('legislative_positive','legislative_negative') THEN 'legislative'
             WHEN classification = 'judicial_event' THEN 'judicial'
-            WHEN classification = 'geopolitical_event' THEN 'geopolitical'
+            WHEN classification IN ('geopolitical_event', 'geopolitical_deescalation') THEN 'geopolitical'
             ELSE 'other'
         END
     """
 
 
-def export_sandbox(db: Database, sector: str = "crypto") -> dict:
-    """Build sandbox.json — per-asset category timeseries for custom indicator sandbox."""
+def export_sandbox(
+    db: Database,
+    sector: str = "crypto",
+    window_days: int = SANDBOX_WINDOW_DAYS,
+    max_markets_per_asset: int = SANDBOX_MAX_MARKETS_PER_ASSET,
+) -> dict:
+    """Build sandbox.json — per-asset category timeseries for custom indicator sandbox.
+
+    Bounded on both axes. `window_days` trims the snapshot history so the payload
+    stops growing with the age of the project; `max_markets_per_asset` keeps the
+    highest-volume markets per asset and drops the long tail. Both bounds are on
+    the per-market series, which is what actually dominates the file — the
+    category aggregates and reference prices are small.
+    """
     ph = "%s" if db.is_postgres else "?"
     cat_case = _build_category_case_sql()
 
@@ -256,6 +295,15 @@ def export_sandbox(db: Database, sector: str = "crypto") -> dict:
     params = [sector]
     if sector != "crypto":
         params.extend(_CRYPTO_TICKERS)
+
+    # Rolling window on snapshot history. Applied in SQL so the rows never leave
+    # the database, and to every query below so the aggregates and the per-market
+    # series describe the same date range.
+    window_start: str | None = None
+    if window_days and window_days > 0:
+        window_start = (datetime.now(timezone.utc).date() - timedelta(days=window_days)).isoformat()
+        base_filter = f"{base_filter} AND date >= {ph}"
+        params.append(window_start)
 
     rows = db._select(f"""
         SELECT date, asset,
@@ -312,8 +360,11 @@ def export_sandbox(db: Database, sector: str = "crypto") -> dict:
         if r.get("end_date"):
             md["end"] = r["end_date"][:10] if r["end_date"] else None  # YYYY-MM-DD
 
-    # Only assets with enough data points (lower threshold for new sectors)
-    min_dates = 1 if sector != "crypto" else 5
+    # Only assets with enough data points. Non-crypto sectors used to qualify on a
+    # single date, which published assets whose whole "series" was one snapshot —
+    # a flat line the sandbox will happily correlate against anything. Same floor
+    # for every sector now.
+    min_dates = 5
     qualified = {a for a, ds in asset_date_sets.items() if len(ds) >= min_dates}
 
     # Reference prices (full date range) — include ALL columns so any "Test Against" works
@@ -334,6 +385,7 @@ def export_sandbox(db: Database, sector: str = "crypto") -> dict:
     # Build columnar arrays per asset
     cats = SECTOR_CATEGORIES.get(sector, SECTOR_CATEGORIES["crypto"])
     assets_out = {}
+    dropped_markets: dict[str, int] = {}
     for asset in sorted(qualified):
         dates = sorted(asset_date_sets[asset])
         cat_arrays = {}
@@ -346,10 +398,22 @@ def export_sandbox(db: Database, sector: str = "crypto") -> dict:
                 n.append(cd.get("n", 0))
             cat_arrays[cat] = {"ws": ws, "wt": wt, "n": n}
 
-        # Per-market data aligned to asset dates
+        # Per-market data aligned to asset dates. Keep the highest-volume markets
+        # first: an asset like OTHER collects thousands of markets, each carrying a
+        # dense array one slot per asset date, and the tail is both the bulk of the
+        # bytes and the least informative part of the signal.
         markets_out = {}
         date_idx = {d: i for i, d in enumerate(dates)}
-        for mid, md in market_data.get(asset, {}).items():
+        asset_markets = market_data.get(asset, {})
+        if max_markets_per_asset and len(asset_markets) > max_markets_per_asset:
+            ranked = sorted(
+                asset_markets.items(),
+                key=lambda kv: (kv[1].get("vol") or 0, len(kv[1]["_dates"])),
+                reverse=True,
+            )
+            dropped_markets[asset] = len(asset_markets) - max_markets_per_asset
+            asset_markets = dict(ranked[:max_markets_per_asset])
+        for mid, md in asset_markets.items():
             # Build aligned arrays
             ss_aligned = [None] * len(dates)
             wt_aligned = [None] * len(dates)
@@ -374,7 +438,22 @@ def export_sandbox(db: Database, sector: str = "crypto") -> dict:
     ref_included = [k for k in ref if k != 'dates']
     log.info("Sandbox[%s]: %d qualified assets, %d ref dates, ref_keys=%s",
              sector, len(qualified), len(ref_dates), ref_included)
-    return {"ref": ref, "assets": assets_out}
+    # Say out loud what was left out — a cap that reports nothing reads as full coverage.
+    log.info("Sandbox[%s]: window=%s (%s days), max %d markets/asset, dropped tail: %s",
+             sector, window_start or "all history", window_days or "unbounded",
+             max_markets_per_asset,
+             ", ".join(f"{a}:{n}" for a, n in sorted(dropped_markets.items())) or "none")
+    return {
+        "ref": ref,
+        "assets": assets_out,
+        "bounds": {
+            "window_days": window_days,
+            "window_start": window_start,
+            "max_markets_per_asset": max_markets_per_asset,
+            "dropped_markets": dropped_markets,
+            "min_dates": min_dates,
+        },
+    }
 
 
 def _json_default(value):
@@ -466,8 +545,13 @@ def build_export_meta(
 @click.option("--db", "db_path", default=None, help="Database path")
 @click.option("--out", "out_dir", default=None, help="Output directory")
 @click.option("--sector", default="crypto", help="Sector to export (default: crypto)")
+@click.option("--sandbox-days", default=SANDBOX_WINDOW_DAYS, show_default=True,
+              help="Rolling window of snapshot history in the sandbox export (0 = all history)")
+@click.option("--sandbox-max-markets", default=SANDBOX_MAX_MARKETS_PER_ASSET, show_default=True,
+              help="Keep at most this many markets per asset, highest volume first (0 = all)")
 @click.option("-v", "--verbose", is_flag=True)
-def main(db_path: str | None, out_dir: str | None, sector: str, verbose: bool):
+def main(db_path: str | None, out_dir: str | None, sector: str,
+         sandbox_days: int, sandbox_max_markets: int, verbose: bool):
     """Export sentiment data to static JSON for the dashboard."""
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
@@ -484,7 +568,12 @@ def main(db_path: str | None, out_dir: str | None, sector: str, verbose: bool):
         latest_data = export_latest(db, sector)
 
         log.info("Exporting sandbox data for sector '%s'...", sector)
-        sandbox_data = export_sandbox(db, sector=sector)
+        sandbox_data = export_sandbox(
+            db,
+            sector=sector,
+            window_days=sandbox_days,
+            max_markets_per_asset=sandbox_max_markets,
+        )
 
     # Add generation timestamp
     latest_data["generated_at"] = now

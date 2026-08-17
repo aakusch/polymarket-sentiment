@@ -27,11 +27,27 @@ function fail(message) {
 
 function parseArgs() {
   const args = process.argv.slice(2);
-  const opts = { maxAgeDays: null };
+  const opts = { maxAgeDays: null, maxFileMb: 25 };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--max-age-days') opts.maxAgeDays = Number(args[++i]);
+    else if (args[i] === '--max-file-mb') opts.maxFileMb = Number(args[++i]);
   }
   return opts;
+}
+
+// Why: these files are committed to git and fetched whole by the browser. An
+// unbounded sandbox export reached 150 MB/sector, past GitHub's 100 MB per-file
+// hard limit — which would turn a staleness failure into a push failure with a
+// half-committed data dir behind it. Catch it before the commit step runs.
+function validateFileSizes(maxFileMb) {
+  if (!maxFileMb) return;
+  for (const name of fs.readdirSync(DATA_DIR)) {
+    if (!name.endsWith('.json')) continue;
+    const mb = fs.statSync(path.join(DATA_DIR, name)).size / (1024 * 1024);
+    if (mb > maxFileMb) {
+      fail(`public/data/${name} is ${mb.toFixed(1)} MB, over the ${maxFileMb} MB limit — tighten the export bounds (--sandbox-days / --sandbox-max-markets)`);
+    }
+  }
 }
 
 function daysOld(dateString) {
@@ -60,7 +76,8 @@ function validateLatest(sector, file, maxAgeDays) {
 }
 
 function main() {
-  const { maxAgeDays } = parseArgs();
+  const { maxAgeDays, maxFileMb } = parseArgs();
+  validateFileSizes(maxFileMb);
   const metaPath = path.join(DATA_DIR, 'meta.json');
   if (!fs.existsSync(metaPath)) fail('public/data/meta.json is missing');
   if (process.exitCode) return;

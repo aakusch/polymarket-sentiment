@@ -590,51 +590,88 @@ function computeCorrelation(xs, ys) {
   return den > 0 ? num / den : 0;
 }
 
-function computePredictiveScore(scores, prices) {
-  const lags = [1, 2, 3, 5, 7, 14, 21, 30];
-  let bestPositive = null, strongestInverse = null;
+// Signed information coefficient at a fixed lag — kept in step with
+// api/_lib/compute.js. The old version scanned 8 lags, kept the max, and clamped
+// negatives to zero, so it could never report "no power" or "inverted" and noise
+// scored positive by construction.
+const PREDICTIVE_LAGS = [1, 2, 3, 5, 7, 14, 21, 30];
+const PREDICTIVE_PRIMARY_LAG = 7;
+const PREDICTIVE_MIN_PAIRS = 20;
 
-  for (const lag of lags) {
-    const pairs = [];
-    for (let i = 0; i < scores.length - lag; i++) {
-      if (scores[i] != null && prices[i] != null && prices[i + lag] != null && prices[i] > 0) {
-        pairs.push([scores[i], prices[i + lag] / prices[i] - 1]);
-      }
-    }
-    if (pairs.length < 10) continue;
-
-    const n = pairs.length;
-    const mx = pairs.reduce((s, p) => s + p[0], 0) / n;
-    const my = pairs.reduce((s, p) => s + p[1], 0) / n;
-    let num = 0, dx2 = 0, dy2 = 0;
-    for (const [x, y] of pairs) {
-      const dx = x - mx, dy = y - my;
-      num += dx * dy;
-      dx2 += dx * dx;
-      dy2 += dy * dy;
-    }
-    const den = Math.sqrt(dx2 * dy2);
-    const r = den > 0 ? num / den : 0;
-
-    if (r > 0 && (!bestPositive || r > bestPositive.r)) {
-      bestPositive = { r, lag };
-    }
-    if (r < 0 && (!strongestInverse || Math.abs(r) > Math.abs(strongestInverse.r))) {
-      strongestInverse = { r, lag };
-    }
+function pearsonCorr(pairs) {
+  const n = pairs.length;
+  if (n < 3) return 0;
+  const mx = pairs.reduce((s, p) => s + p[0], 0) / n;
+  const my = pairs.reduce((s, p) => s + p[1], 0) / n;
+  let num = 0, dx2 = 0, dy2 = 0;
+  for (const [x, y] of pairs) {
+    const dx = x - mx, dy = y - my;
+    num += dx * dy;
+    dx2 += dx * dx;
+    dy2 += dy * dy;
   }
+  const den = Math.sqrt(dx2 * dy2);
+  return den > 0 ? num / den : 0;
+}
 
-  const selected = bestPositive || strongestInverse;
-  if (!selected) return null;
+function computePredictiveScore(scores, prices) {
+  const byLag = [];
+  for (const lag of PREDICTIVE_LAGS) {
+    const pairs = [];
+    // Score CHANGE vs forward return: levels are autocorrelated, which inflates r.
+    for (let i = 1; i < scores.length - lag; i++) {
+      const s0 = scores[i], sPrev = scores[i - 1];
+      const p0 = prices[i], pF = prices[i + lag];
+      if (s0 == null || sPrev == null || p0 == null || pF == null || p0 <= 0) continue;
+      pairs.push([s0 - sPrev, pF / p0 - 1]);
+    }
+    if (pairs.length < PREDICTIVE_MIN_PAIRS) continue;
+    const ic = pearsonCorr(pairs);
+    const nEff = Math.max(3, Math.floor(pairs.length / lag));  // overlapping windows
+    const tStat = ic * Math.sqrt((nEff - 2) / Math.max(1e-9, 1 - ic * ic));
+    byLag.push({
+      lag,
+      ic: Math.round(ic * 1000) / 1000,
+      n: pairs.length,
+      nEff,
+      tStat: Math.round(tStat * 100) / 100,
+      significant: Math.abs(tStat) >= 2,
+    });
+  }
+  if (byLag.length === 0) return null;
 
-  const positiveR = Math.max(0, selected.r);
-  const lagMultiplier = 0.7 + (1 - selected.lag / 30) * 0.3;
-  const score = Math.round(positiveR * 100 * lagMultiplier);
+  const primary = byLag.find(l => l.lag === PREDICTIVE_PRIMARY_LAG) || byLag[0];
+  const inSampleBest = byLag.reduce((a, b) => (Math.abs(b.ic) > Math.abs(a.ic) ? b : a));
+
   return {
-    score: Math.max(0, Math.min(100, score)),
-    peakCorrelation: Math.round(selected.r * 1000) / 1000,
-    optimalLag: selected.lag,
+    score: Math.round(primary.ic * 100),   // signed, -100..100
+    ic: primary.ic,
+    n: primary.n,
+    nEff: primary.nEff,
+    tStat: primary.tStat,
+    significant: primary.significant,
+    lag: primary.lag,
+    byLag,
+    inSampleBest: { lag: inSampleBest.lag, ic: inSampleBest.ic, inSample: true },
+    peakCorrelation: primary.ic,
+    optimalLag: primary.lag,
   };
+}
+
+// Presentation for the signed IC. A statistically insignificant result reads
+// "n.s." rather than borrowing the colour of a real one — an indicator with no
+// measurable power should look like it has none.
+function predictiveLabel(predictive) {
+  if (!predictive) return '--';
+  if (!predictive.significant) return `${predictive.score} n.s.`;
+  return predictive.score > 0 ? `+${predictive.score}` : `${predictive.score}`;
+}
+
+function predictiveColor(predictive, dim) {
+  if (!predictive || !predictive.significant) return dim || '#6b7280';
+  if (predictive.score >= 10) return '#4ade80';
+  if (predictive.score <= -10) return '#f87171';
+  return '#fbbf24';
 }
 
 function computeDirectionalAccuracy(scores, prices) {
@@ -880,7 +917,7 @@ function renderIndicatorInsights(rankedAll, ranked) {
     ? withScores.reduce((sum, r) => sum + r.lastScore, 0) / withScores.length
     : null;
   const protectedCount = rankedAll.filter(r => isPaidIndicator(r.ind)).length;
-  const predictiveLeaders = rankedAll.filter(r => (r.predictive?.score ?? 0) >= 60).length;
+  const predictiveLeaders = rankedAll.filter(r => r.predictive?.significant && r.predictive.score > 0).length;
   const totalEngagement = rankedAll.reduce((sum, r) => sum + engagementScore(r.ind), 0);
   const top = [...rankedAll].filter(r => r.lastScore != null).sort((a, b) => b.lastScore - a.lastScore)[0];
   el.innerHTML = [
@@ -1032,8 +1069,8 @@ async function renderIndicatorsPage() {
         return cb - ca;
       }
       case 'predictive': {
-        const pa = a.predictive?.score ?? -1;
-        const pb = b.predictive?.score ?? -1;
+        const pa = a.predictive?.significant ? a.predictive.score : -Infinity;
+        const pb = b.predictive?.significant ? b.predictive.score : -Infinity;
         return pb - pa;
       }
       case 'newest':
@@ -1211,8 +1248,8 @@ function renderIndicatorTableUnified(ranked) {
     const corrClr = corr != null ? (Math.abs(corr) > 0.5 ? '#4ade80' : Math.abs(corr) > 0.3 ? '#fbbf24' : '#9ca3af') : '#4b5563';
     const dirAccStr = dirAcc != null ? dirAcc.toFixed(0) + '%' : '--';
     const dirAccClr = dirAcc != null ? (dirAcc > 55 ? '#4ade80' : dirAcc > 50 ? '#fbbf24' : '#9ca3af') : '#4b5563';
-    const predStr = predictive ? predictive.score.toString() : '--';
-    const predClr = predictive ? (predictive.score > 60 ? '#4ade80' : predictive.score > 40 ? '#fbbf24' : '#9ca3af') : '#4b5563';
+    const predStr = predictiveLabel(predictive);
+    const predClr = predictiveColor(predictive, '#4b5563');
     const escapedName = ind.name.replace(/'/g, "\\'");
     const marketCount = getIndicatorMarketCount(ind);
     const label = lastScore != null ? scoreLabel(lastScore) : '';
@@ -1296,8 +1333,8 @@ function renderIndicatorCards(ranked) {
     const corrClr = corr != null ? (Math.abs(corr) > 0.5 ? '#4ade80' : Math.abs(corr) > 0.3 ? '#fbbf24' : '#9ca3af') : '#6b7280';
     const dirAccStr = dirAcc != null ? dirAcc.toFixed(0) + '%' : '--';
     const dirAccClr = dirAcc != null ? (dirAcc > 55 ? '#4ade80' : dirAcc > 50 ? '#fbbf24' : '#9ca3af') : '#6b7280';
-    const predStr = predictive ? predictive.score.toString() : '--';
-    const predClr = predictive ? (predictive.score > 60 ? '#4ade80' : predictive.score > 40 ? '#fbbf24' : '#9ca3af') : '#6b7280';
+    const predStr = predictiveLabel(predictive);
+    const predClr = predictiveColor(predictive, '#6b7280');
     const marketCount = getIndicatorMarketCount(ind);
     const escapedName = ind.name.replace(/'/g, "\\'");
     const label = lastScore != null ? scoreLabel(lastScore) : '';
@@ -1703,8 +1740,8 @@ async function renderIndicatorDetail() {
   const corrClr = corr != null ? (Math.abs(corr) > 0.5 ? '#4ade80' : Math.abs(corr) > 0.3 ? '#fbbf24' : '#9ca3af') : '#6b7280';
   const dirAccStr = dirAcc != null ? dirAcc.toFixed(1) + '%' : '--';
   const dirAccClr = dirAcc != null ? (dirAcc > 55 ? '#4ade80' : dirAcc > 50 ? '#fbbf24' : '#9ca3af') : '#6b7280';
-  const predStr = predictive ? predictive.score.toString() : '--';
-  const predClr = predictive ? (predictive.score > 60 ? '#4ade80' : predictive.score > 40 ? '#fbbf24' : '#9ca3af') : '#6b7280';
+  const predStr = predictiveLabel(predictive);
+  const predClr = predictiveColor(predictive, '#6b7280');
   const lagStr = predictive ? `${predictive.optimalLag}d` : '--';
 
   const refKey = resolveIndicatorReferenceAsset(ind, sector);
@@ -3049,7 +3086,9 @@ function renderBuilderMetrics(ts) {
   const corrStr = corr != null ? (corr > 0 ? '+' : '') + corr.toFixed(3) : '--';
   const dirStr = dirAcc != null ? dirAcc.toFixed(1) + '%' : '--';
   const predStr = predictive ? `${predictive.score}` : '--';
-  const predColor = predictive ? (predictive.score > 60 ? 'text-green-400' : predictive.score > 40 ? 'text-yellow-400' : 'text-gray-400') : 'text-gray-500';
+  const predColor = (!predictive || !predictive.significant) ? 'text-gray-500'
+    : predictive.score >= 10 ? 'text-green-400'
+    : predictive.score <= -10 ? 'text-red-400' : 'text-yellow-400';
   const lagStr = predictive ? `${predictive.optimalLag}d` : '';
 
   const mktCount = Object.keys(builderState.selectedMarkets).length;
